@@ -62,24 +62,38 @@ server.tool("get-balances", "Get the balances of all token holdings and stocks f
             stockPrices = await fetchStockPrices(stockBalances.map((s) => s.stockCode));
         }
         const aggregatedData = {
-            tokens: tokenBalances.map((token) => ({
-                ...token,
-                value: includePrices
-                    ? token.balance * (tokenPrices[token.symbol] || 0)
-                    : 0,
-            })),
-            stocks: stockBalances.map((stock) => ({
-                ...stock,
-                value: includePrices
-                    ? stock.quantity * (stockPrices[stock.stockCode] || 0)
-                    : 0,
-            })),
+            tokens: tokenBalances.map((token) => {
+                const price = tokenPrices[token.symbol] || 0;
+                const value = token.balance * price;
+                console.error(`Token ${token.symbol}: ${token.balance.toLocaleString()} tokens × ${price.toFixed(2)} KES = ${value.toLocaleString()} KES`);
+                return {
+                    ...token,
+                    value: includePrices ? value : 0,
+                };
+            }),
+            stocks: stockBalances.map((stock) => {
+                const price = stockPrices[stock.stockCode] || 0;
+                const value = stock.quantity * price;
+                console.error(`Stock ${stock.stockCode}: ${stock.quantity.toLocaleString()} shares × ${price.toFixed(2)} KES = ${value.toLocaleString()} KES`);
+                return {
+                    ...stock,
+                    value: includePrices ? value : 0,
+                };
+            }),
             totalValue: 0,
             lastUpdated: Date.now(),
         };
-        aggregatedData.totalValue =
-            aggregatedData.tokens.reduce((sum, t) => sum + t.value, 0) +
-                aggregatedData.stocks.reduce((sum, s) => sum + s.value, 0);
+        const totalTokenValue = aggregatedData.tokens.reduce((sum, t) => sum + t.value, 0);
+        const totalStockValue = aggregatedData.stocks.reduce((sum, s) => sum + s.value, 0);
+        aggregatedData.totalValue = totalTokenValue + totalStockValue;
+        console.error("\nPortfolio Summary:");
+        console.error("=================");
+        console.error(`Total Token Value: ${totalTokenValue.toLocaleString()} KES`);
+        console.error(`Total Stock Value: ${totalStockValue.toLocaleString()} KES`);
+        console.error(`Total Portfolio Value: ${aggregatedData.totalValue.toLocaleString()} KES`);
+        console.error("\nDetailed Portfolio Data:");
+        console.error("=====================");
+        console.error(JSON.stringify(aggregatedData, null, 2));
         return {
             content: [
                 {
@@ -88,7 +102,15 @@ server.tool("get-balances", "Get the balances of all token holdings and stocks f
                 },
                 {
                     type: "text",
-                    text: JSON.stringify(aggregatedData, null, 2),
+                    text: JSON.stringify({
+                        summary: {
+                            totalTokenValue: totalTokenValue.toLocaleString() + " KES",
+                            totalStockValue: totalStockValue.toLocaleString() + " KES",
+                            totalPortfolioValue: aggregatedData.totalValue.toLocaleString() + " KES",
+                            lastUpdated: new Date(aggregatedData.lastUpdated).toLocaleString(),
+                        },
+                        details: aggregatedData,
+                    }, null, 2),
                 },
             ],
         };
@@ -158,7 +180,6 @@ async function fetchStockBalances(userId, email, password) {
 async function fetchStockPrices(symbols) {
     try {
         console.error("Original symbols:", symbols);
-        // Convert token symbols to stock codes using the mapping
         const stockCodes = symbols.map((symbol) => {
             const stockCode = SYMBOL_TO_STOCK_CODE[symbol] || symbol;
             if (stockCode !== symbol) {
