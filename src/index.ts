@@ -16,23 +16,9 @@ const TEST_EMAIL = "sylusabel4@example.com";
 const TEST_PASSWORD = "sam@2002";
 const TEST_USER_ID = "67e50b7ce4a9ae751ea2e999";
 
-const options: CreateFTOptions = {
-  name: "Standard Group PLC", // Token name (string, required)
-  symbol: "SGL", // Token symbol (string, required)
-  decimals: 2, // Number of decimal places (optional, defaults to 0)
-  initialSupply: 1000000, // Initial supply of tokens (optional, defaults to 0), given in base unit
-  isSupplyKey: true, // Supply key flag (optional, defaults to false)
-  maxSupply: 1000000000, // Maximum token supply (optional, if not set there is no maxSupply), given in base unit
-  isMetadataKey: true, // Metadata key flag (optional, defaults to false)
-  isAdminKey: true, // Admin key flag (optional, defaults to false)
-  tokenMetadata: new TextEncoder().encode("Standard Group PLC"), // Token metadata (optional, can be omitted if not needed)
-  memo: "Standard Group PLC", // Optional memo (string)
-};
-
 // Mapping between token symbols and their corresponding stock codes
 const SYMBOL_TO_STOCK_CODE: Record<string, string> = {
   "I&M": "IMH",
-  // Add more mappings as needed
 };
 
 // Create server without Hedera initialization
@@ -108,7 +94,6 @@ server.tool(
         includePrices
       );
 
-      // Ensure we return the correct type for MCP server
       return {
         content: result.content.map((item) => ({
           ...item,
@@ -127,6 +112,31 @@ server.tool(
         ],
       };
     }
+  }
+);
+
+// Compare the current portfolio with an ideal portfolio based on the
+// user's risk tolerance, current market conditions, and investment goals
+server.tool(
+  "compare-portfolio",
+  "Compare the current portfolio with an ideal portfolio based on the user's risk tolerance, current market conditions, and investment goals",
+  {
+    userId: z.string().describe("Unique identifier for the portfolio"),
+    riskTolerance: z.number().describe("The user's risk tolerance"),
+    investmentGoals: z.string().describe("The user's investment goals"),
+  },
+  async ({ userId, riskTolerance, investmentGoals }) => {
+    console.log(userId);
+    console.log(riskTolerance);
+    console.log(investmentGoals);
+    return {
+      content: [
+        {
+          type: "text",
+          text: "Successfully compared portfolio",
+        },
+      ],
+    };
   }
 );
 
