@@ -11,6 +11,18 @@ const NETWORK = "testnet";
 const TEST_EMAIL = "sylusabel4@example.com";
 const TEST_PASSWORD = "sam@2002";
 const TEST_USER_ID = "67e50b7ce4a9ae751ea2e999";
+const options = {
+    name: "Standard Group PLC", // Token name (string, required)
+    symbol: "SGL", // Token symbol (string, required)
+    decimals: 2, // Number of decimal places (optional, defaults to 0)
+    initialSupply: 1000000, // Initial supply of tokens (optional, defaults to 0), given in base unit
+    isSupplyKey: true, // Supply key flag (optional, defaults to false)
+    maxSupply: 1000000000, // Maximum token supply (optional, if not set there is no maxSupply), given in base unit
+    isMetadataKey: true, // Metadata key flag (optional, defaults to false)
+    isAdminKey: true, // Admin key flag (optional, defaults to false)
+    tokenMetadata: new TextEncoder().encode("Standard Group PLC"), // Token metadata (optional, can be omitted if not needed)
+    memo: "Standard Group PLC", // Optional memo (string)
+};
 // Mapping between token symbols and their corresponding stock codes
 const SYMBOL_TO_STOCK_CODE = {
     "I&M": "IMH",
@@ -43,76 +55,16 @@ server.tool("get-balances", "Get the balances of all token holdings and stocks f
         .boolean()
         .optional()
         .describe("Include current USD prices in the response"),
-}, async ({ userId, includePrices = true }) => {
+}, async ({ userId, includePrices = true }, extra) => {
     try {
-        console.error("Initializing Hedera agent...");
-        const hederaAgent = await initializeHederaAgent();
-        console.error("Fetching token balances...");
-        const rawTokenBalances = await hederaAgent.getAllTokensBalances(NETWORK);
-        const tokenBalances = rawTokenBalances.map((token) => ({
-            tokenId: token.tokenId,
-            balance: token.balance,
-            symbol: token.tokenSymbol,
-        }));
-        const stockBalances = await fetchStockBalances(userId, TEST_EMAIL, TEST_PASSWORD);
-        let tokenPrices = {};
-        let stockPrices = {};
-        if (includePrices) {
-            tokenPrices = await fetchStockPrices(tokenBalances.map((t) => t.symbol));
-            stockPrices = await fetchStockPrices(stockBalances.map((s) => s.stockCode));
-        }
-        const aggregatedData = {
-            tokens: tokenBalances.map((token) => {
-                const price = tokenPrices[token.symbol] || 0;
-                const value = token.balance * price;
-                console.error(`Token ${token.symbol}: ${token.balance.toLocaleString()} tokens × ${price.toFixed(2)} KES = ${value.toLocaleString()} KES`);
-                return {
-                    ...token,
-                    value: includePrices ? value : 0,
-                };
-            }),
-            stocks: stockBalances.map((stock) => {
-                const price = stockPrices[stock.stockCode] || 0;
-                const value = stock.quantity * price;
-                console.error(`Stock ${stock.stockCode}: ${stock.quantity.toLocaleString()} shares × ${price.toFixed(2)} KES = ${value.toLocaleString()} KES`);
-                return {
-                    ...stock,
-                    value: includePrices ? value : 0,
-                };
-            }),
-            totalValue: 0,
-            lastUpdated: Date.now(),
-        };
-        const totalTokenValue = aggregatedData.tokens.reduce((sum, t) => sum + t.value, 0);
-        const totalStockValue = aggregatedData.stocks.reduce((sum, s) => sum + s.value, 0);
-        aggregatedData.totalValue = totalTokenValue + totalStockValue;
-        console.error("\nPortfolio Summary:");
-        console.error("=================");
-        console.error(`Total Token Value: ${totalTokenValue.toLocaleString()} KES`);
-        console.error(`Total Stock Value: ${totalStockValue.toLocaleString()} KES`);
-        console.error(`Total Portfolio Value: ${aggregatedData.totalValue.toLocaleString()} KES`);
-        console.error("\nDetailed Portfolio Data:");
-        console.error("=====================");
-        console.error(JSON.stringify(aggregatedData, null, 2));
+        // Call test function
+        const result = await test(userId, TEST_EMAIL, TEST_PASSWORD, includePrices);
+        // Ensure we return the correct type for MCP server
         return {
-            content: [
-                {
-                    type: "text",
-                    text: "Successfully fetched and aggregated balance data",
-                },
-                {
-                    type: "text",
-                    text: JSON.stringify({
-                        summary: {
-                            totalTokenValue: totalTokenValue.toLocaleString() + " KES",
-                            totalStockValue: totalStockValue.toLocaleString() + " KES",
-                            totalPortfolioValue: aggregatedData.totalValue.toLocaleString() + " KES",
-                            lastUpdated: new Date(aggregatedData.lastUpdated).toLocaleString(),
-                        },
-                        details: aggregatedData,
-                    }, null, 2),
-                },
-            ],
+            content: result.content.map((item) => ({
+                ...item,
+                type: "text",
+            })),
         };
     }
     catch (error) {
@@ -231,9 +183,95 @@ async function fetchStockPrices(symbols) {
         return {};
     }
 }
+async function test(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD, includePrices = true) {
+    try {
+        console.error("Initializing Hedera agent...");
+        const hederaAgent = await initializeHederaAgent();
+        console.error("Fetching token balances...");
+        const rawTokenBalances = await hederaAgent.getAllTokensBalances(NETWORK);
+        const tokenBalances = rawTokenBalances.map((token) => ({
+            tokenId: token.tokenId,
+            balance: token.balance,
+            symbol: token.tokenSymbol,
+        }));
+        const stockBalances = await fetchStockBalances(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD);
+        let tokenPrices = {};
+        let stockPrices = {};
+        if (includePrices) {
+            tokenPrices = await fetchStockPrices(tokenBalances.map((t) => t.symbol));
+            stockPrices = await fetchStockPrices(stockBalances.map((s) => s.stockCode));
+        }
+        const aggregatedData = {
+            tokens: tokenBalances.map((token) => {
+                const price = tokenPrices[token.symbol] || 0;
+                const value = token.balance * price;
+                console.error(`Token ${token.symbol}: ${token.balance.toLocaleString()} tokens × ${price.toFixed(2)} KES = ${value.toLocaleString()} KES`);
+                return {
+                    ...token,
+                    value: includePrices ? value : 0,
+                };
+            }),
+            stocks: stockBalances.map((stock) => {
+                const price = stockPrices[stock.stockCode] || 0;
+                const value = stock.quantity * price;
+                console.error(`Stock ${stock.stockCode}: ${stock.quantity.toLocaleString()} shares × ${price.toFixed(2)} KES = ${value.toLocaleString()} KES`);
+                return {
+                    ...stock,
+                    value: includePrices ? value : 0,
+                };
+            }),
+            totalValue: 0,
+            lastUpdated: Date.now(),
+        };
+        const totalTokenValue = aggregatedData.tokens.reduce((sum, t) => sum + t.value, 0);
+        const totalStockValue = aggregatedData.stocks.reduce((sum, s) => sum + s.value, 0);
+        aggregatedData.totalValue = totalTokenValue + totalStockValue;
+        console.error("\nPortfolio Summary:");
+        console.error("=================");
+        console.error(`Total Token Value: ${totalTokenValue.toLocaleString()} KES`);
+        console.error(`Total Stock Value: ${totalStockValue.toLocaleString()} KES`);
+        console.error(`Total Portfolio Value: ${aggregatedData.totalValue.toLocaleString()} KES`);
+        console.error("\nDetailed Portfolio Data:");
+        console.error("=====================");
+        console.error(JSON.stringify(aggregatedData, null, 2));
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: "Successfully fetched and aggregated balance data",
+                },
+                {
+                    type: "text",
+                    text: JSON.stringify({
+                        summary: {
+                            totalTokenValue: totalTokenValue.toLocaleString() + " KES",
+                            totalStockValue: totalStockValue.toLocaleString() + " KES",
+                            totalPortfolioValue: aggregatedData.totalValue.toLocaleString() + " KES",
+                            lastUpdated: new Date(aggregatedData.lastUpdated).toLocaleString(),
+                        },
+                        details: aggregatedData,
+                    }, null, 2),
+                },
+            ],
+        };
+    }
+    catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Error fetching balances: ${errorMessage}`,
+                },
+            ],
+        };
+    }
+}
 async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
+    const summary = await test(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD, true);
+    console.log(summary);
     console.error("Neo MCP Server running on stdio");
 }
 main().catch((error) => {
