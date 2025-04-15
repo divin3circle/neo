@@ -4,7 +4,7 @@
 
 ### A. Agent Controller
 
-Responsible of handling the decision engine for portfolio analysis, trade suggestions and rebalance triggers. Interfaces with Hedera Agent Kit for blockchain actions. Also responsible for interfacing with Antropic's MCP SDK for reflection, memory, and reasoning.
+Responsible of handling the decision engine for portfolio analysis, trade suggestions and rebalance triggers. Interfaces with Hedera Agent Kit for blockchain actions. Also responsible for interfacing with Anthropic's MCP SDK for reflection, memory, and reasoning.
 
 ### B. Memory Architecture
 
