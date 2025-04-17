@@ -49,3 +49,5 @@ Just as the rebalancing logic, Neo will check the user's current holding stocks-
 
 Each action, i.e. rebalancing, minting or redeeming by Neo will be logged to HCS as a topic, and or saved in a database for learning purposes and review. With these memory Neo can get smarter without the need to train while adapting to a user's specific habits, appetite and the market it finds itself in.
 The goal is to have Neo capable of executing transactions on the blockchain, able to justify decision and learn from old mistakes to continuously improve.
+
+Neo creates a topic with the HIP 991 standard, with a custom fee of 0.1 USDC(now they user has a reason to deposit USDC via M-Pesa). Each user prompts is treated a message subscription paid to the AI agent. The communication is done over HCS-10.
