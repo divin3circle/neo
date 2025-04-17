@@ -2,7 +2,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { HederaAgentKit } from "hedera-agent-kit";
-import fs from "fs";
 // Constants that were previously in .env
 const ACCOUNT_ID = "0.0.5824374";
 const DER_PRIVATE_KEY = "3030020100300706052b8104000a04220420969f1f80158f05f4589f6f607b09d6c6478bcd83fe3766bc2922415f8b093c23";
@@ -11,24 +10,6 @@ const NETWORK = "testnet";
 const TEST_EMAIL = "sylusabel4@example.com";
 const TEST_PASSWORD = "sam@2002";
 const TEST_USER_ID = "67e50b7ce4a9ae751ea2e999";
-const options = {
-    name: "Standard Group PLC", // Token name (string, required)
-    symbol: "SGL", // Token symbol (string, required)
-    decimals: 2, // Number of decimal places (optional, defaults to 0)
-    initialSupply: 1000000, // Initial supply of tokens (optional, defaults to 0), given in base unit
-    isSupplyKey: true, // Supply key flag (optional, defaults to false)
-    maxSupply: 1000000000, // Maximum token supply (optional, if not set there is no maxSupply), given in base unit
-    isMetadataKey: true, // Metadata key flag (optional, defaults to false)
-    isAdminKey: true, // Admin key flag (optional, defaults to false)
-    tokenMetadata: new TextEncoder().encode("Standard Group PLC"), // Token metadata (optional, can be omitted if not needed)
-    memo: "Standard Group PLC", // Optional memo (string)
-};
-// Mapping between token symbols and their corresponding stock codes
-const SYMBOL_TO_STOCK_CODE = {
-    "I&M": "IMH",
-    // Add more mappings as needed
-};
-// Create server without Hedera initialization
 const server = new McpServer({
     name: "neo",
     version: "0.1.0",
@@ -38,7 +19,6 @@ const server = new McpServer({
         tools: {},
     },
 });
-// Helper function to initialize Hedera agent
 async function initializeHederaAgent() {
     try {
         return new HederaAgentKit(ACCOUNT_ID, DER_PRIVATE_KEY, DER_PUBLIC_KEY, NETWORK);
@@ -48,26 +28,64 @@ async function initializeHederaAgent() {
         throw error;
     }
 }
-// Register get portfolio and token balance tool
+// Get the balances of all token holdings and stocks for a given portfolio
 server.tool("get-balances", "Get the balances of all token holdings and stocks for a given portfolio", {
     userId: z.string().describe("Unique identifier for the portfolio"),
-    includePrices: z
-        .boolean()
-        .optional()
-        .describe("Include current USD prices in the response"),
-}, async ({ userId, includePrices = true }, extra) => {
+}, async ({ userId }, extra) => {
     try {
-        // Call test function
-        const result = await test(userId, TEST_EMAIL, TEST_PASSWORD, includePrices);
-        // Ensure we return the correct type for MCP server
-        return {
-            content: result.content.map((item) => ({
-                ...item,
-                type: "text",
+        console.error("Fetching balances for user:", userId);
+        // Initialize Hedera agent
+        console.error("Initializing Hedera agent...");
+        const hederaAgent = await initializeHederaAgent();
+        // Fetch token balances
+        console.error("Fetching token balances...");
+        const rawTokenBalances = await hederaAgent.getAllTokensBalances(NETWORK);
+        const tokenBalances = rawTokenBalances.map((token) => ({
+            tokenId: token.tokenId,
+            balance: Number(token.balance),
+            symbol: token.tokenSymbol,
+        }));
+        console.error(`Found ${tokenBalances.length} token balances`);
+        // Fetch stock balances
+        console.error("Fetching stock balances...");
+        const stockBalances = await fetchStockBalances(userId, TEST_EMAIL, TEST_PASSWORD);
+        console.error(`Found ${stockBalances.length} stock balances`);
+        // Aggregate the data
+        const portfolioData = {
+            tokens: tokenBalances.map((token) => ({
+                tokenId: token.tokenId,
+                balance: token.balance,
+                symbol: token.symbol,
             })),
+            stocks: stockBalances.map((stock) => ({
+                stockCode: stock.stockCode,
+                quantity: stock.quantity,
+                lockedQuantity: stock.lockedQuantity,
+            })),
+            lastUpdated: new Date().toISOString(),
+        };
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: "Successfully fetched portfolio balances",
+                },
+                {
+                    type: "text",
+                    text: JSON.stringify({
+                        summary: {
+                            totalTokens: tokenBalances.length,
+                            totalStocks: stockBalances.length,
+                            lastUpdated: portfolioData.lastUpdated,
+                        },
+                        details: portfolioData,
+                    }),
+                },
+            ],
         };
     }
     catch (error) {
+        console.error("Error fetching balances:", error);
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
         return {
             content: [
@@ -79,111 +97,316 @@ server.tool("get-balances", "Get the balances of all token holdings and stocks f
         };
     }
 });
+// Get the current value of the portfolio in KES
+server.tool("get-portfolio-value", "Get the current value of the portfolio", {
+    userId: z.string().describe("Unique identifier for the portfolio"),
+}, async ({ userId }, extra) => {
+    try {
+        const hederaAgent = await initializeHederaAgent();
+        console.error("Fetching token balances...");
+        const rawTokenBalances = await hederaAgent.getAllTokensBalances(NETWORK);
+        const tokenBalances = rawTokenBalances.map((token) => ({
+            tokenId: token.tokenId,
+            balance: Number(token.balance),
+            symbol: token.tokenSymbol,
+        }));
+        console.error(`Found ${tokenBalances.length} token balances`);
+        console.error("Fetching stock balances...");
+        const stockBalances = await fetchStockBalances(userId, TEST_EMAIL, TEST_PASSWORD);
+        console.log(stockBalances);
+        console.log(tokenBalances);
+        // map on each token and stock get't it current price and aggregate the data
+        const assetValues = await getAssetValue([
+            ...stockBalances.map((stock) => stock.stockCode),
+            ...tokenBalances.map((token) => token.symbol),
+        ]);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify(assetValues),
+                },
+            ],
+        };
+    }
+    catch (error) {
+        console.error(error);
+        console.error("Error fetching balances:", error);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Error fetching balances: ${errorMessage}`,
+                },
+            ],
+        };
+    }
+});
+// Compare current user portfolio with the trends of the stocks & tokens he owns
+server.tool("compare-portfolio-with-trends", "Compare current user portfolio with the trends of the stocks & tokens he owns", {
+    stockCodes: z.array(z.string()).describe("Stock codes owned by the user"),
+}, async ({ stockCodes }, extra) => {
+    let stockDetailsMap = {};
+    try {
+        for (let i = 0; i < stockCodes.length; i++) {
+            const stockDetails = await analyzeStockFromAFX(stockCodes[i]);
+            stockDetailsMap[stockCodes[i]] = stockDetails;
+        }
+    }
+    catch (error) {
+        console.error(error);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Error fetching user portfolio and their trends: ${errorMessage}`,
+                },
+            ],
+        };
+    }
+    return {
+        content: [
+            {
+                type: "text",
+                text: "Successfully fetched user portfolio and their trends in html format",
+            },
+            {
+                type: "text",
+                text: JSON.stringify(stockDetailsMap),
+            },
+        ],
+    };
+});
 // Helper functions
 async function fetchStockBalances(userId, email, password) {
     try {
-        console.log("---------------🔂Attempting to fetch stock balances🔂---------------");
-        console.log("\n");
+        console.error("Attempting to fetch stock balances...");
         const loginResponse = await fetch(`http://localhost:5004/api/auth/login`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({ email, password }),
+        }).catch((error) => {
+            console.error("Network error during login:", error);
+            throw new Error("Failed to connect to authentication service");
         });
         if (!loginResponse.ok) {
-            throw new Error(`*************❌Login failed: ${loginResponse.statusText}❌*************`);
+            console.error("Login failed with status:", loginResponse.status);
+            return [];
         }
-        const loginData = await loginResponse.json();
-        const token = loginData.token;
-        console.log("--------------👌Login successful, token received👌----------------");
-        console.log("\n");
+        const loginData = await loginResponse.json().catch((error) => {
+            console.error("Error parsing login response:", error);
+            return { token: null };
+        });
+        if (!loginData.token) {
+            console.error("No token received in login response");
+            return [];
+        }
         const authResponse = await fetch(`http://localhost:5004/api/auth/me`, {
             headers: {
-                Authorization: `Bearer ${token}`,
+                Authorization: `Bearer ${loginData.token}`,
                 "Content-Type": "application/json",
             },
+        }).catch((error) => {
+            console.error("Network error fetching user profile:", error);
+            return null;
         });
-        if (!authResponse.ok) {
-            throw new Error(`Failed to fetch user profile: ${authResponse.statusText}`);
+        if (!authResponse?.ok) {
+            console.error("Auth request failed with status:", authResponse?.status);
+            return [];
         }
-        const authData = await authResponse.json();
-        const stocks = authData.user.stockHoldings;
-        if (!stocks || !Array.isArray(stocks)) {
-            throw new Error("Invalid stock holdings data format");
+        const authData = await authResponse.json().catch((error) => {
+            console.error("Error parsing auth response:", error);
+            return { user: { stockHoldings: [] } };
+        });
+        const stocks = authData?.user?.stockHoldings || [];
+        if (!Array.isArray(stocks)) {
+            console.error("Invalid stock holdings format:", stocks);
+            return [];
         }
-        const stockHoldings = stocks.map((holding) => ({
-            _id: holding._id || "",
+        return stocks.map((holding) => ({
             stockCode: holding.stockCode || "",
             quantity: Number(holding.quantity) || 0,
             lockedQuantity: Number(holding.lockedQuantity) || 0,
-            value: Number(holding.value) || 0,
         }));
-        console.log(`--------------✅${stockHoldings.length} stocks holdings processed✅----------------`, stockHoldings);
-        console.log("\n");
-        return stockHoldings;
     }
     catch (error) {
-        console.error(`*************❌Error in fetchStockBalances: ${error}❌*************`);
-        console.log("\n");
-        throw error;
+        console.error("Error in fetchStockBalances:", error);
+        return [];
     }
 }
-async function fetchStockPrices(symbols) {
+async function scrapStockPriceFromNse(symbol) {
+    const url = `https://afx.kwayisi.org/chart/nse/${symbol}`;
     try {
-        console.error("Original symbols:", symbols);
-        const stockCodes = symbols.map((symbol) => {
-            const stockCode = SYMBOL_TO_STOCK_CODE[symbol] || symbol;
-            if (stockCode !== symbol) {
-                console.error(`Mapped ${symbol} to ${stockCode}`);
-            }
-            return stockCode;
-        });
-        console.error("Converted to stock codes:", stockCodes);
-        const csvData = await fs.promises.readFile("data/nse_stocks_2024.csv", "utf-8");
-        const rows = csvData.split("\n");
-        console.error("CSV header:", rows[0]);
-        const prices = {};
-        let matchedSymbols = 0;
-        for (let i = 1; i < rows.length; i++) {
-            const row = rows[i].split(",");
-            if (row.length < 8)
-                continue;
-            const code = row[1].trim();
-            const dayPrice = row[7].trim();
-            if (!code || !dayPrice || dayPrice === "-")
-                continue;
-            if (stockCodes.includes(code)) {
-                console.error(`Found match for ${code} with price ${dayPrice}`);
-                const price = parseFloat(dayPrice.replace(/,/g, ""));
-                if (!isNaN(price)) {
-                    // Find the original symbol for this stock code
-                    const originalSymbol = symbols[stockCodes.indexOf(code)];
-                    prices[originalSymbol] = price;
-                    matchedSymbols++;
-                }
-            }
+        // fetch the html page
+        const res = await fetch(url);
+        if (!res.ok)
+            throw new Error(`HTTP ${res.status}`);
+        const html = await res.text();
+        // 2. Regex‑extract the contents of `series[0].data = [ ... ]`
+        //    We capture everything between data:[   HERE   ]
+        const dataBlockMatch = html.match(/series\s*:\s*\[\{[^]*?data\s*:\s*\[([\s\S]+?)\]\s*\}/);
+        if (!dataBlockMatch) {
+            throw new Error("Could not find Highcharts data array");
         }
-        console.error(`Matched ${matchedSymbols} out of ${symbols.length} symbols`);
-        console.error("Unmatched symbols:", symbols.filter((s) => !prices[s]));
-        console.error("Final prices object:", prices);
-        symbols.forEach((symbol) => {
-            if (!prices[symbol]) {
-                console.error(`No price match found for symbol: ${symbol} (stock code: ${SYMBOL_TO_STOCK_CODE[symbol] || symbol})`);
-                prices[symbol] = 0;
-            }
-        });
-        return prices;
+        const rawData = dataBlockMatch[1];
+        // 3. Find all [d("DATE"), PRICE] pairs
+        const pairRE = /\[d\("([^"]+)"\)\s*,\s*([\d.]+)\]/g;
+        const pairs = Array.from(rawData.matchAll(pairRE)).map((m) => ({
+            date: m[1], // e.g. "2025-04-16"
+            price: parseFloat(m[2]), // e.g. 44.1
+        }));
+        if (pairs.length === 0) {
+            throw new Error("No data points parsed");
+        }
+        // 4. The last entry is the most recent
+        const latest = pairs[pairs.length - 1];
+        return latest.price;
     }
     catch (error) {
-        console.error("Error reading stock prices:", error);
-        if (error instanceof Error && error.message.includes("ENOENT")) {
-            console.error("CSV file not found at data/nse_stocks_2024.csv");
-        }
+        console.error("Error scraping stock price from NSE:", error);
+        return -1;
+    }
+}
+async function getAssetValue(assets) {
+    if (assets.length === 0) {
+        console.log("No assets found.");
         return {};
     }
+    let priceMap = {};
+    for (let i = 0; i < assets.length; i++) {
+        const asset = assets[i];
+        let parsedAsset = asset;
+        if (asset.includes("&")) {
+            parsedAsset = "IMH";
+        }
+        const price = await scrapStockPriceFromNse(parsedAsset);
+        priceMap[asset] = price;
+    }
+    return priceMap;
 }
-async function test(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD, includePrices = true) {
+async function fetchMarketNews(symbol) {
+    try {
+        console.error(`Fetching news for ${symbol}...`);
+        const searchQuery = `NSE:${symbol} stock Nairobi Securities Exchange Kenya company news.`;
+        const url = `https://api.search.brave.com/res/v1/news/search?q=${encodeURIComponent(searchQuery)}`;
+        const headers = {
+            Accept: "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": process.env.BRAVE_API_KEY || "BSACEBx42fdjEYy1bZ2mcgvO1GLT9Fv",
+        };
+        const response = await fetch(url, { headers });
+        if (!response.ok)
+            throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        const newsItems = [];
+        let positiveCount = 0;
+        let negativeCount = 0;
+        // Keywords for sentiment analysis
+        const positiveKeywords = [
+            "growth",
+            "profit",
+            "increase",
+            "rise",
+            "gain",
+            "positive",
+            "success",
+            "strong",
+            "improve",
+        ];
+        const negativeKeywords = [
+            "loss",
+            "decline",
+            "decrease",
+            "fall",
+            "negative",
+            "weak",
+            "poor",
+            "risk",
+            "concern",
+        ];
+        // Process each news item
+        for (const item of data.results || []) {
+            // Simple sentiment analysis based on keywords
+            let sentiment = "neutral";
+            const combinedText = `${item.title} ${item.description}`.toLowerCase();
+            const positiveMatches = positiveKeywords.filter((word) => combinedText.includes(word)).length;
+            const negativeMatches = negativeKeywords.filter((word) => combinedText.includes(word)).length;
+            if (positiveMatches > negativeMatches) {
+                sentiment = "positive";
+                positiveCount++;
+            }
+            else if (negativeMatches > positiveMatches) {
+                sentiment = "negative";
+                negativeCount++;
+            }
+            newsItems.push({
+                title: item.title,
+                description: item.description,
+                url: item.url,
+                publishTime: item.publishTime,
+                sentiment,
+            });
+        }
+        // Determine overall sentiment
+        let overallSentiment = "neutral";
+        if (positiveCount > negativeCount)
+            overallSentiment = "positive";
+        else if (negativeCount > positiveCount)
+            overallSentiment = "negative";
+        // Generate summary points
+        const summary = [];
+        if (newsItems.length > 0) {
+            summary.push(`Found ${newsItems.length} recent news items`);
+            summary.push(`Overall market sentiment: ${overallSentiment}`);
+            if (positiveCount > 0)
+                summary.push(`${positiveCount} positive developments reported`);
+            if (negativeCount > 0)
+                summary.push(`${negativeCount} concerning developments noted`);
+        }
+        else {
+            summary.push("No recent news found");
+        }
+        return {
+            symbol,
+            news: newsItems,
+            overallSentiment,
+            summary,
+        };
+    }
+    catch (error) {
+        console.error(`Error fetching news for ${symbol}:`, error);
+        return {
+            symbol,
+            news: [],
+            overallSentiment: "neutral",
+            summary: ["Unable to fetch market news"],
+        };
+    }
+}
+async function analyzeStockFromAFX(symbol) {
+    try {
+        // Normalize symbol for I&M Holdings
+        const normalizedSymbol = symbol.includes("&")
+            ? "imh"
+            : symbol.toLowerCase();
+        const url = `https://afx.kwayisi.org/nse/${normalizedSymbol}.html`;
+        console.error(`Fetching AFX data for ${symbol} from ${url}`);
+        const response = await fetch(url);
+        if (!response.ok)
+            throw new Error(`HTTP ${response.status}`);
+        const html = await response.text();
+        return html;
+    }
+    catch (error) {
+        console.error(`Error analyzing stock from AFX: ${error}`);
+        return "An error occurred while analyzing the stock from AFX";
+    }
+}
+async function test(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD) {
     try {
         console.error("Initializing Hedera agent...");
         const hederaAgent = await initializeHederaAgent();
@@ -191,49 +414,15 @@ async function test(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD, includePrices = tru
         const rawTokenBalances = await hederaAgent.getAllTokensBalances(NETWORK);
         const tokenBalances = rawTokenBalances.map((token) => ({
             tokenId: token.tokenId,
-            balance: token.balance,
+            balance: Number(token.balance),
             symbol: token.tokenSymbol,
         }));
         const stockBalances = await fetchStockBalances(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD);
-        let tokenPrices = {};
-        let stockPrices = {};
-        if (includePrices) {
-            tokenPrices = await fetchStockPrices(tokenBalances.map((t) => t.symbol));
-            stockPrices = await fetchStockPrices(stockBalances.map((s) => s.stockCode));
-        }
         const aggregatedData = {
-            tokens: tokenBalances.map((token) => {
-                const price = tokenPrices[token.symbol] || 0;
-                const value = token.balance * price;
-                console.error(`Token ${token.symbol}: ${token.balance.toLocaleString()} tokens × ${price.toFixed(2)} KES = ${value.toLocaleString()} KES`);
-                return {
-                    ...token,
-                    value: includePrices ? value : 0,
-                };
-            }),
-            stocks: stockBalances.map((stock) => {
-                const price = stockPrices[stock.stockCode] || 0;
-                const value = stock.quantity * price;
-                console.error(`Stock ${stock.stockCode}: ${stock.quantity.toLocaleString()} shares × ${price.toFixed(2)} KES = ${value.toLocaleString()} KES`);
-                return {
-                    ...stock,
-                    value: includePrices ? value : 0,
-                };
-            }),
-            totalValue: 0,
+            tokens: tokenBalances,
+            stocks: stockBalances,
             lastUpdated: Date.now(),
         };
-        const totalTokenValue = aggregatedData.tokens.reduce((sum, t) => sum + t.value, 0);
-        const totalStockValue = aggregatedData.stocks.reduce((sum, s) => sum + s.value, 0);
-        aggregatedData.totalValue = totalTokenValue + totalStockValue;
-        console.error("\nPortfolio Summary:");
-        console.error("=================");
-        console.error(`Total Token Value: ${totalTokenValue.toLocaleString()} KES`);
-        console.error(`Total Stock Value: ${totalStockValue.toLocaleString()} KES`);
-        console.error(`Total Portfolio Value: ${aggregatedData.totalValue.toLocaleString()} KES`);
-        console.error("\nDetailed Portfolio Data:");
-        console.error("=====================");
-        console.error(JSON.stringify(aggregatedData, null, 2));
         return {
             content: [
                 {
@@ -244,13 +433,12 @@ async function test(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD, includePrices = tru
                     type: "text",
                     text: JSON.stringify({
                         summary: {
-                            totalTokenValue: totalTokenValue.toLocaleString() + " KES",
-                            totalStockValue: totalStockValue.toLocaleString() + " KES",
-                            totalPortfolioValue: aggregatedData.totalValue.toLocaleString() + " KES",
+                            totalTokens: tokenBalances.length,
+                            totalStocks: stockBalances.length,
                             lastUpdated: new Date(aggregatedData.lastUpdated).toLocaleString(),
                         },
                         details: aggregatedData,
-                    }, null, 2),
+                    }),
                 },
             ],
         };
@@ -268,11 +456,17 @@ async function test(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD, includePrices = tru
     }
 }
 async function main() {
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-    const summary = await test(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD, true);
-    console.log(summary);
-    console.error("Neo MCP Server running on stdio");
+    try {
+        const transport = new StdioServerTransport();
+        await server.connect(transport);
+        const scomPrice = await analyzeStockFromAFX("KCB");
+        console.error(scomPrice);
+        console.error("Neo MCP Server running on stdio");
+    }
+    catch (error) {
+        console.error("Fatal error in main():", error);
+        process.exit(1);
+    }
 }
 main().catch((error) => {
     console.error("Fatal error in main():", error);
