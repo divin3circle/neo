@@ -79,24 +79,6 @@ interface RequestExtra {
   request(req: McpRequest): Promise<any>;
 }
 
-// Add these new interfaces
-interface MarketTrend {
-  symbol: string;
-  trend: "bullish" | "bearish" | "neutral";
-  priceChange: number;
-  volume: number;
-  analysis: string[];
-}
-
-interface StockRecommendation {
-  symbol: string;
-  action: "buy" | "sell" | "hold";
-  targetPrice: number;
-  currentPrice: number;
-  reasoning: string[];
-  riskLevel: number;
-}
-
 interface NewsItem {
   title: string;
   description: string;
@@ -110,35 +92,6 @@ interface MarketNews {
   news: NewsItem[];
   overallSentiment: "positive" | "negative" | "neutral";
   summary: string[];
-}
-
-interface StockAnalysis {
-  symbol: string;
-  currentPrice: number;
-  previousClose: number;
-  dayRange: {
-    low: number;
-    high: number;
-  };
-  volume: number;
-  marketCap: number;
-  priceChange: {
-    day: number;
-    week: number;
-    month: number;
-    year: number;
-  };
-  technicalIndicators: {
-    trend: "bullish" | "bearish" | "neutral";
-    support: number;
-    resistance: number;
-  };
-  fundamentals: {
-    pe: number;
-    eps: number;
-    dividend: number;
-  };
-  analysis: string[];
 }
 
 async function initializeHederaAgent(): Promise<HederaAgentKit> {
@@ -272,11 +225,19 @@ server.tool(
         ...stockBalances.map((stock) => stock.stockCode),
         ...tokenBalances.map((token) => token.symbol),
       ]);
+      const totalValue = Object.values(assetValues).reduce(
+        (acc, curr) => acc + curr,
+        0
+      );
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(assetValues),
+          },
+          {
+            type: "text",
+            text: `Total value of the portfolio is ${totalValue}`,
           },
         ],
       };
@@ -300,15 +261,15 @@ server.tool(
 // Compare current user portfolio with the trends of the stocks & tokens he owns
 server.tool(
   "compare-portfolio-with-trends",
-  "Compare current user portfolio with the trends of the stocks & tokens he owns",
+  "Use Brave Search to get the latest news and trends of the stocks & tokens he owns and compare it with the current portfolio",
   {
     stockCodes: z.array(z.string()).describe("Stock codes owned by the user"),
   },
   async ({ stockCodes }, extra) => {
-    let stockDetailsMap: Record<string, string> = {};
+    let stockDetailsMap: Record<string, MarketNews> = {};
     try {
       for (let i = 0; i < stockCodes.length; i++) {
-        const stockDetails = await analyzeStockFromAFX(stockCodes[i]);
+        const stockDetails = await fetchMarketNews(stockCodes[i]);
         stockDetailsMap[stockCodes[i]] = stockDetails;
       }
     } catch (error) {
@@ -336,6 +297,38 @@ server.tool(
         },
       ],
     };
+  }
+);
+
+// Generate a report and recommended actions(mint, redeem or swap for USDC) for the user based on the portfolio and the trends
+// The conclusion should include they action needed, the rationale behind it, and the amount of token to be redeemed swapped or minted
+// E.g if KCB is trending upwards and SCOM downwards, the report should recommend the user to swap SCOM to USDC then swap the USDC to KCB
+// The report will be used by the next tool to make the necessary actions
+server.tool(
+  "generate-report",
+  "Use Brave Search to generate a report and recommended actions(mint, redeem or swap for USDC) for the user based on the portfolio and the trends. The report should include the action needed, the rationale behind it, and the amount of token to be redeemed swapped or minted.",
+  {
+    stockCodes: z.array(z.string()).describe("Stock codes owned by the user"),
+  },
+  async ({ stockCodes }, extra) => {
+    try {
+      const news = await generateReport(stockCodes);
+      return {
+        content: [{ type: "text", text: JSON.stringify(news) }],
+      };
+    } catch (error) {
+      console.error(error);
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error generating report: ${errorMessage}`,
+          },
+        ],
+      };
+    }
   }
 );
 
@@ -583,86 +576,29 @@ async function fetchMarketNews(symbol: string): Promise<MarketNews> {
   }
 }
 
-async function analyzeStockFromAFX(symbol: string): Promise<string> {
+async function generateReport(stockCodes: string[]): Promise<MarketNews> {
   try {
-    // Normalize symbol for I&M Holdings
-    const normalizedSymbol = symbol.includes("&")
-      ? "imh"
-      : symbol.toLowerCase();
-    const url = `https://afx.kwayisi.org/nse/${normalizedSymbol}.html`;
-
-    console.error(`Fetching AFX data for ${symbol} from ${url}`);
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const html = await response.text();
-    return html;
-  } catch (error) {
-    console.error(`Error analyzing stock from AFX: ${error}`);
-    return "An error occurred while analyzing the stock from AFX";
-  }
-}
-
-async function test(
-  TEST_USER_ID: string,
-  TEST_EMAIL: string,
-  TEST_PASSWORD: string
-) {
-  try {
-    console.error("Initializing Hedera agent...");
-    const hederaAgent = await initializeHederaAgent();
-
-    console.error("Fetching token balances...");
-    const rawTokenBalances = await hederaAgent.getAllTokensBalances(NETWORK);
-
-    const tokenBalances: TokenBalance[] = rawTokenBalances.map((token) => ({
-      tokenId: token.tokenId,
-      balance: Number(token.balance),
-      symbol: token.tokenSymbol,
-    }));
-
-    const stockBalances = await fetchStockBalances(
-      TEST_USER_ID,
-      TEST_EMAIL,
-      TEST_PASSWORD
-    );
-
-    const aggregatedData: AggregatedBalance = {
-      tokens: tokenBalances,
-      stocks: stockBalances,
-      lastUpdated: Date.now(),
+    const report: MarketNews = {
+      symbol: "",
+      news: [],
+      overallSentiment: "neutral",
+      summary: [],
     };
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: "Successfully fetched and aggregated balance data",
-        },
-        {
-          type: "text",
-          text: JSON.stringify({
-            summary: {
-              totalTokens: tokenBalances.length,
-              totalStocks: stockBalances.length,
-              lastUpdated: new Date(
-                aggregatedData.lastUpdated
-              ).toLocaleString(),
-            },
-            details: aggregatedData,
-          }),
-        },
-      ],
-    };
+    for (let i = 0; i < stockCodes.length; i++) {
+      const stockDetails = await fetchMarketNews(stockCodes[i]);
+      report.symbol = stockDetails.symbol;
+      report.news = stockDetails.news;
+      report.overallSentiment = stockDetails.overallSentiment;
+      report.summary = stockDetails.summary;
+    }
+    return report;
   } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : "Unknown error";
+    console.error(error);
     return {
-      content: [
-        {
-          type: "text",
-          text: `Error fetching balances: ${errorMessage}`,
-        },
-      ],
+      symbol: "",
+      news: [],
+      overallSentiment: "neutral",
+      summary: ["Unable to generate report"],
     };
   }
 }
@@ -671,8 +607,6 @@ async function main() {
   try {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    const scomPrice = await analyzeStockFromAFX("KCB");
-    console.error(scomPrice);
     console.error("Neo MCP Server running on stdio");
   } catch (error) {
     console.error("Fatal error in main():", error);

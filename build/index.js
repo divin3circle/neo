@@ -120,11 +120,16 @@ server.tool("get-portfolio-value", "Get the current value of the portfolio", {
             ...stockBalances.map((stock) => stock.stockCode),
             ...tokenBalances.map((token) => token.symbol),
         ]);
+        const totalValue = Object.values(assetValues).reduce((acc, curr) => acc + curr, 0);
         return {
             content: [
                 {
                     type: "text",
                     text: JSON.stringify(assetValues),
+                },
+                {
+                    type: "text",
+                    text: `Total value of the portfolio is ${totalValue}`,
                 },
             ],
         };
@@ -144,13 +149,13 @@ server.tool("get-portfolio-value", "Get the current value of the portfolio", {
     }
 });
 // Compare current user portfolio with the trends of the stocks & tokens he owns
-server.tool("compare-portfolio-with-trends", "Compare current user portfolio with the trends of the stocks & tokens he owns", {
+server.tool("compare-portfolio-with-trends", "Use Brave Search to get the latest news and trends of the stocks & tokens he owns and compare it with the current portfolio", {
     stockCodes: z.array(z.string()).describe("Stock codes owned by the user"),
 }, async ({ stockCodes }, extra) => {
     let stockDetailsMap = {};
     try {
         for (let i = 0; i < stockCodes.length; i++) {
-            const stockDetails = await analyzeStockFromAFX(stockCodes[i]);
+            const stockDetails = await fetchMarketNews(stockCodes[i]);
             stockDetailsMap[stockCodes[i]] = stockDetails;
         }
     }
@@ -178,6 +183,32 @@ server.tool("compare-portfolio-with-trends", "Compare current user portfolio wit
             },
         ],
     };
+});
+// Generate a report and recommended actions(mint, redeem or swap for USDC) for the user based on the portfolio and the trends
+// The conclusion should include they action needed, the rationale behind it, and the amount of token to be redeemed swapped or minted
+// E.g if KCB is trending upwards and SCOM downwards, the report should recommend the user to swap SCOM to USDC then swap the USDC to KCB
+// The report will be used by the next tool to make the necessary actions
+server.tool("generate-report", "Use Brave Search to generate a report and recommended actions(mint, redeem or swap for USDC) for the user based on the portfolio and the trends. The report should include the action needed, the rationale behind it, and the amount of token to be redeemed swapped or minted.", {
+    stockCodes: z.array(z.string()).describe("Stock codes owned by the user"),
+}, async ({ stockCodes }, extra) => {
+    try {
+        const news = await generateReport(stockCodes);
+        return {
+            content: [{ type: "text", text: JSON.stringify(news) }],
+        };
+    }
+    catch (error) {
+        console.error(error);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Error generating report: ${errorMessage}`,
+                },
+            ],
+        };
+    }
 });
 // Helper functions
 async function fetchStockBalances(userId, email, password) {
@@ -387,71 +418,30 @@ async function fetchMarketNews(symbol) {
         };
     }
 }
-async function analyzeStockFromAFX(symbol) {
+async function generateReport(stockCodes) {
     try {
-        // Normalize symbol for I&M Holdings
-        const normalizedSymbol = symbol.includes("&")
-            ? "imh"
-            : symbol.toLowerCase();
-        const url = `https://afx.kwayisi.org/nse/${normalizedSymbol}.html`;
-        console.error(`Fetching AFX data for ${symbol} from ${url}`);
-        const response = await fetch(url);
-        if (!response.ok)
-            throw new Error(`HTTP ${response.status}`);
-        const html = await response.text();
-        return html;
+        const report = {
+            symbol: "",
+            news: [],
+            overallSentiment: "neutral",
+            summary: [],
+        };
+        for (let i = 0; i < stockCodes.length; i++) {
+            const stockDetails = await fetchMarketNews(stockCodes[i]);
+            report.symbol = stockDetails.symbol;
+            report.news = stockDetails.news;
+            report.overallSentiment = stockDetails.overallSentiment;
+            report.summary = stockDetails.summary;
+        }
+        return report;
     }
     catch (error) {
-        console.error(`Error analyzing stock from AFX: ${error}`);
-        return "An error occurred while analyzing the stock from AFX";
-    }
-}
-async function test(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD) {
-    try {
-        console.error("Initializing Hedera agent...");
-        const hederaAgent = await initializeHederaAgent();
-        console.error("Fetching token balances...");
-        const rawTokenBalances = await hederaAgent.getAllTokensBalances(NETWORK);
-        const tokenBalances = rawTokenBalances.map((token) => ({
-            tokenId: token.tokenId,
-            balance: Number(token.balance),
-            symbol: token.tokenSymbol,
-        }));
-        const stockBalances = await fetchStockBalances(TEST_USER_ID, TEST_EMAIL, TEST_PASSWORD);
-        const aggregatedData = {
-            tokens: tokenBalances,
-            stocks: stockBalances,
-            lastUpdated: Date.now(),
-        };
+        console.error(error);
         return {
-            content: [
-                {
-                    type: "text",
-                    text: "Successfully fetched and aggregated balance data",
-                },
-                {
-                    type: "text",
-                    text: JSON.stringify({
-                        summary: {
-                            totalTokens: tokenBalances.length,
-                            totalStocks: stockBalances.length,
-                            lastUpdated: new Date(aggregatedData.lastUpdated).toLocaleString(),
-                        },
-                        details: aggregatedData,
-                    }),
-                },
-            ],
-        };
-    }
-    catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "Unknown error";
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: `Error fetching balances: ${errorMessage}`,
-                },
-            ],
+            symbol: "",
+            news: [],
+            overallSentiment: "neutral",
+            summary: ["Unable to generate report"],
         };
     }
 }
@@ -459,8 +449,6 @@ async function main() {
     try {
         const transport = new StdioServerTransport();
         await server.connect(transport);
-        const scomPrice = await analyzeStockFromAFX("KCB");
-        console.error(scomPrice);
         console.error("Neo MCP Server running on stdio");
     }
     catch (error) {
