@@ -1,8 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { CreateFTOptions, HederaAgentKit } from "hedera-agent-kit";
-import fs from "fs";
+import {
+  CreateFTOptions,
+  CreateNFTOptions,
+  HederaAgentKit,
+} from "hedera-agent-kit";
+import { TokenId } from "@hashgraph/sdk";
 
 // Constants that were previously in .env
 const ACCOUNT_ID = "0.0.5824374";
@@ -25,49 +29,6 @@ const server = new McpServer({
     tools: {},
   },
 });
-
-// Types for balance management
-interface TokenBalance {
-  tokenId: string;
-  balance: number;
-  symbol: string;
-}
-
-interface StockBalance {
-  stockCode: string;
-  quantity: number;
-  lockedQuantity: number;
-}
-
-interface StockNews {
-  symbol: string;
-  news: string[];
-}
-
-interface AggregatedBalance {
-  tokens: TokenBalance[];
-  stocks: StockBalance[];
-  lastUpdated: number;
-}
-
-interface AssetValue {
-  string: number;
-}
-
-interface MarketAnalysis {
-  symbol: string;
-  currentPrice: number;
-  sentiment: "positive" | "negative" | "neutral";
-  insights: {
-    keyDevelopments: string[];
-    risks: string[];
-    opportunities: string[];
-  };
-  recommendation: {
-    action: "buy" | "sell" | "hold";
-    reasoning: string[];
-  };
-}
 
 interface McpRequest {
   server: string;
@@ -325,6 +286,63 @@ server.tool(
           {
             type: "text",
             text: `Error generating report: ${errorMessage}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Make the necessary actions based on the report
+server.tool(
+  "execute-trading-actions",
+  "Use Hedera Agent Kit to execute the trading actions based on the report",
+  {
+    actions: z
+      .array(
+        z.object({
+          type: z.enum(["mint", "redeem", "swap"]),
+          token: z
+            .string()
+            .describe("The token to be minted, redeemed or swapped"),
+          tokenId: z
+            .string()
+            .describe("The token id to be minted, redeemed or swapped"),
+          amount: z
+            .number()
+            .describe("The amount of token to be minted, redeemed or swapped"),
+          rationale: z.string().describe("The rationale behind the action"),
+          targetToken: z.string().describe("The token to be swapped to"), // only used when type is swap
+        })
+      )
+      .describe("The actions to be executed"),
+  },
+  async ({ actions }, extra) => {
+    try {
+      const hederaAgent = await initializeHederaAgent();
+      for (let i = 0; i < actions.length; i++) {
+        const action = actions[i];
+        if (action.type === "mint") {
+          await hederaAgent.mintToken(
+            TokenId.fromString(action.tokenId),
+            action.amount
+          );
+        }
+      }
+      return {
+        content: [
+          { type: "text", text: "Successfully executed trading actions" },
+        ],
+      };
+    } catch (error) {
+      console.error(error);
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error executing trading actions: ${errorMessage}`,
           },
         ],
       };
@@ -605,6 +623,7 @@ async function generateReport(stockCodes: string[]): Promise<MarketNews> {
 
 async function main() {
   try {
+    const hederaAgent = await initializeHederaAgent();
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error("Neo MCP Server running on stdio");
