@@ -5,16 +5,47 @@ import {
   CreateFTOptions,
   CreateNFTOptions,
   HederaAgentKit,
+  HederaNetworkType,
 } from "hedera-agent-kit";
-import { TokenId } from "@hashgraph/sdk";
+import {
+  AccountId,
+  Client,
+  CustomFixedFee,
+  Hbar,
+  PrivateKey,
+  TokenId,
+  TopicCreateTransaction,
+  TransferTransaction,
+} from "@hashgraph/sdk";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 // Constants that were previously in .env
-const ACCOUNT_ID = "0.0.5824374";
-const DER_PRIVATE_KEY =
-  "3030020100300706052b8104000a04220420969f1f80158f05f4589f6f607b09d6c6478bcd83fe3766bc2922415f8b093c23";
-const DER_PUBLIC_KEY =
-  "302d300706052b8104000a03220003c0f30d0b3b078d339cf198281cc803397566c89b584aa583983f7c04791014aa";
-const NETWORK = "testnet";
+const ACCOUNT_ID = process.env.OPERATOR_ACCOUNT_ID;
+const DER_PRIVATE_KEY = process.env.OPERATOR_PRIVATE_KEY;
+const NETWORK = process.env.NETWORK;
+const MOCK_USDC = process.env.MOCK_USDC;
+const CUSTOM_FEE = process.env.CUSTOM_FEE;
+const API_BASE_URL = process.env.API_BASE_URL;
+
+if (
+  !ACCOUNT_ID ||
+  !DER_PRIVATE_KEY ||
+  !NETWORK ||
+  !MOCK_USDC ||
+  !CUSTOM_FEE ||
+  !API_BASE_URL
+) {
+  throw new Error("Missing environment variables");
+}
+const PRIVATE_KEY = PrivateKey.fromBytesECDSA(
+  Buffer.from(DER_PRIVATE_KEY, "hex")
+);
+const PUBLIC_KEY = PRIVATE_KEY.publicKey;
+let client = Client.forTestnet();
+
+client.setOperator(ACCOUNT_ID, PRIVATE_KEY);
 
 const TEST_EMAIL = "sylusabel4@example.com";
 const TEST_PASSWORD = "sam@2002";
@@ -29,16 +60,6 @@ const server = new McpServer({
     tools: {},
   },
 });
-
-interface McpRequest {
-  server: string;
-  tool: string;
-  params: Record<string, any>;
-}
-
-interface RequestExtra {
-  request(req: McpRequest): Promise<any>;
-}
 
 interface NewsItem {
   title: string;
@@ -55,13 +76,33 @@ interface MarketNews {
   summary: string[];
 }
 
+interface MintTransactionResponse {
+  message: string;
+  transaction: {
+    userId: string;
+    tokenId: string;
+    stockCode: string;
+    amount: number;
+    hederaTransactionId: string;
+    type: "MINT" | "REDEEM" | "SWAP";
+    status: "COMPLETED" | "PENDING" | "FAILED" | string;
+    fee: number;
+    paymentTokenId: string;
+    paymentAmount: number;
+    _id: string;
+    createdAt: string;
+    updatedAt: string;
+    __v: number;
+  };
+}
+
 async function initializeHederaAgent(): Promise<HederaAgentKit> {
   try {
     return new HederaAgentKit(
-      ACCOUNT_ID,
-      DER_PRIVATE_KEY,
-      DER_PUBLIC_KEY,
-      NETWORK
+      ACCOUNT_ID!,
+      PRIVATE_KEY.toString(),
+      PUBLIC_KEY.toString(),
+      NETWORK! as HederaNetworkType
     );
   } catch (error) {
     console.error("Error initializing Hedera Agent Kit:", error);
@@ -86,7 +127,9 @@ server.tool(
 
       // Fetch token balances
       console.error("Fetching token balances...");
-      const rawTokenBalances = await hederaAgent.getAllTokensBalances(NETWORK);
+      const rawTokenBalances = await hederaAgent.getAllTokensBalances(
+        NETWORK as HederaNetworkType
+      );
       const tokenBalances = rawTokenBalances.map((token) => ({
         tokenId: token.tokenId,
         balance: Number(token.balance),
@@ -165,7 +208,9 @@ server.tool(
       const hederaAgent = await initializeHederaAgent();
 
       console.error("Fetching token balances...");
-      const rawTokenBalances = await hederaAgent.getAllTokensBalances(NETWORK);
+      const rawTokenBalances = await hederaAgent.getAllTokensBalances(
+        NETWORK as HederaNetworkType
+      );
       const tokenBalances = rawTokenBalances.map((token) => ({
         tokenId: token.tokenId,
         balance: Number(token.balance),
@@ -304,7 +349,7 @@ server.tool(
           type: z.enum(["mint", "redeem", "swap"]),
           token: z
             .string()
-            .describe("The token to be minted, redeemed or swapped"),
+            .describe("The token symbol to be minted, redeemed or swapped"),
           tokenId: z
             .string()
             .describe("The token id to be minted, redeemed or swapped"),
@@ -316,16 +361,73 @@ server.tool(
         })
       )
       .describe("The actions to be executed"),
+    email: z.string().describe("The email of the user"),
+    password: z
+      .string()
+      .describe("The password of the user for authentication."),
+    privateKey: z
+      .string()
+      .describe(
+        "The ECDSA private key of the user to sign trade transactions."
+      ),
+    accountId: z
+      .string()
+      .describe("The account id of the user to sign trade transactions."),
   },
-  async ({ actions }, extra) => {
+  async ({ actions, email, password, privateKey, accountId }, extra) => {
+    let responseContent;
     try {
-      const hederaAgent = await initializeHederaAgent();
+      const authToken = await getAuthToken(email, password);
+      if (!authToken) {
+        console.log("Failed to get authenticate user.");
+        responseContent =
+          "Couldn't safely authenticate you with the email provided.";
+        return {
+          content: [
+            {
+              type: "text",
+              text: responseContent,
+            },
+          ],
+        };
+      }
       for (let i = 0; i < actions.length; i++) {
         const action = actions[i];
         if (action.type === "mint") {
-          await hederaAgent.mintToken(
-            TokenId.fromString(action.tokenId),
-            action.amount
+          // call our backend to mint the required tokens
+          const mintResponse: MintTransactionResponse = await mintTokens(
+            action.token,
+            action.amount,
+            authToken
+          );
+          if (!mintResponse) {
+            responseContent = "Failed to mint tokens.";
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: responseContent,
+                },
+              ],
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Successfully minted ${action.amount} ${action.token} tokens`,
+                body: JSON.stringify(mintResponse),
+              },
+            ],
+          };
+        } else if (action.type === "redeem") {
+          const redeemResponse = await redeemTokens(
+            action.token,
+            action.amount,
+            authToken,
+            PrivateKey.fromStringECDSA(privateKey),
+            accountId,
+            action.tokenId
           );
         }
       }
@@ -621,11 +723,206 @@ async function generateReport(stockCodes: string[]): Promise<MarketNews> {
   }
 }
 
+// Create a topic for each client interaction
+async function createTopic(
+  topicName: string,
+  topicMemo: string,
+  privateKey: PrivateKey
+) {
+  try {
+    console.log("Setting up a custom fee configuration ...");
+    const customFee = new CustomFixedFee()
+      .setDenominatingTokenId(MOCK_USDC!)
+      .setAmount(Number(CUSTOM_FEE))
+      .setFeeCollectorAccountId(ACCOUNT_ID!);
+    console.log(
+      `Custom fee configured: ${CUSTOM_FEE} ${MOCK_USDC} tokens per message`
+    );
+
+    console.log("Creating new topic with custom fee...");
+    const topicCreateTx = new TopicCreateTransaction()
+      .setTopicMemo(`${topicName}: ${topicMemo}`)
+      .setSubmitKey(privateKey)
+      .setCustomFees([customFee]);
+
+    const executeTopicCreateTx = await topicCreateTx.execute(client);
+    const topicCreateReceipt = await executeTopicCreateTx.getReceipt(client);
+    const topicId = topicCreateReceipt.topicId;
+    console.log(`Topic created successfully with ID: ${topicId}`);
+  } catch (error) {
+    console.error("Error creating topic:", error);
+  }
+}
+
+async function getAuthToken(
+  email: string,
+  password: string
+): Promise<string | null> {
+  try {
+    const loginResponse = await fetch(`http://localhost:5004/api/auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, password }),
+    }).catch((error) => {
+      console.error("Network error during login:", error);
+      throw new Error("Failed to connect to authentication service");
+    });
+
+    if (!loginResponse.ok) {
+      console.error("Login failed with status:", loginResponse.status);
+      return null;
+    }
+
+    const loginData = await loginResponse.json().catch((error) => {
+      console.error("Error parsing login response:", error);
+      return { token: null };
+    });
+
+    if (!loginData.token) {
+      console.error("No token received in login response");
+      return null;
+    }
+    return loginData.token;
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
+}
+
+async function mintTokens(
+  tokenCode: string,
+  amount: number,
+  authToken: string
+) {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/tokens/${tokenCode.toLocaleUpperCase()}/mint`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ amount }),
+      }
+    );
+    if (!response.ok) {
+      console.error("Failed to mint tokens:", response.statusText);
+      return null;
+    }
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
+}
+
+async function redeemTokens(
+  tokenCode: string,
+  amount: number,
+  authToken: string,
+  privateKey: PrivateKey,
+  accountId: string,
+  tokenId: string
+) {
+  try {
+    console.log("Creating transfer transaction...");
+    console.log(`From: ${accountId}`);
+    console.log(`To: ${ACCOUNT_ID}`);
+    console.log(`Amount: ${amount}`);
+    console.log(`Token ID: ${tokenId} - ${tokenCode}`);
+
+    const hederaPrivateKey = privateKey;
+
+    const MY_ACCOUNT_ID = AccountId.fromString("0.0.5171455");
+    const MY_PRIVATE_KEY = PrivateKey.fromStringED25519(
+      "4666f5b5e528d5c549ea78d540b31ee18802145e242f31e3af079e0975da2294"
+    );
+
+    client = Client.forTestnet();
+    client.setOperator(MY_ACCOUNT_ID, MY_PRIVATE_KEY);
+
+    console.log(`Client set to: ${client}`);
+
+    const transaction = new TransferTransaction()
+      .addTokenTransfer(tokenId, AccountId.fromString(accountId), -amount)
+      .addTokenTransfer(tokenId, AccountId.fromString(ACCOUNT_ID!), amount);
+
+    // Set max transaction fee
+    transaction.setMaxTransactionFee(new Hbar(10));
+
+    console.log("Freezing transaction with client...");
+    const frozenTx = transaction.freezeWith(client);
+    console.log("Transaction frozen successfully");
+
+    console.log("Transaction created, signing...");
+    const signedTx = await frozenTx.sign(hederaPrivateKey);
+    console.log("Transaction signed, executing...");
+    const txResponse = await signedTx.execute(client);
+    console.log("Transaction executed, getting receipt...");
+    const receipt = await txResponse.getReceipt(client);
+
+    if (receipt.status.toString() !== "SUCCESS") {
+      console.error(
+        "Transaction failed with status:",
+        receipt.status.toString()
+      );
+      throw new Error(`Token transfer failed: ${receipt.status.toString()}`);
+    }
+
+    console.log("Transaction successful, sending to backend...");
+    console.log("Transaction ID:", txResponse.transactionId.toString());
+
+    // Send the burn request with transaction ID to the backend
+    const burnResponse = await fetch(
+      `${API_BASE_URL}/tokens/${tokenCode}/burn`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          amount,
+          transactionId: txResponse.transactionId.toString(),
+        }),
+      }
+    );
+
+    if (!burnResponse.ok) {
+      const errorData = await burnResponse.json();
+      console.error("Backend burn request failed:", errorData);
+      throw new Error(errorData.message || "Failed to burn tokens");
+    }
+
+    const result = await burnResponse.json();
+    console.log("Backend response:", result);
+    if (!result) {
+      throw new Error("No response from backend");
+    }
+    return result;
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
+}
+
 async function main() {
   try {
     const hederaAgent = await initializeHederaAgent();
     const transport = new StdioServerTransport();
     await server.connect(transport);
+    const authToken = await getAuthToken("js_cool@gmail.com", "sam@2002");
+    if (!authToken) {
+      console.error("Failed to get authenticate user.");
+      return;
+    }
+    console.log(authToken);
+    const mintTxn = await mintTokens("KCB", 10, authToken);
+    console.log(mintTxn);
     console.error("Neo MCP Server running on stdio");
   } catch (error) {
     console.error("Fatal error in main():", error);
