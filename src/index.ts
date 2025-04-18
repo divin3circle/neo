@@ -39,6 +39,9 @@ if (
 ) {
   throw new Error("Missing environment variables");
 }
+
+console.log("API_BASE_URL:", API_BASE_URL);
+
 const PRIVATE_KEY = PrivateKey.fromBytesECDSA(
   Buffer.from(DER_PRIVATE_KEY, "hex")
 );
@@ -341,7 +344,7 @@ server.tool(
 // Make the necessary actions based on the report
 server.tool(
   "execute-trading-actions",
-  "Use Hedera Agent Kit to execute the trading actions based on the report",
+  "Use Hedera Agent Kit to execute the trading actions based on the report or by a user's request",
   {
     actions: z
       .array(
@@ -368,7 +371,7 @@ server.tool(
     privateKey: z
       .string()
       .describe(
-        "The ECDSA private key of the user to sign trade transactions."
+        "The DER encoded ECDSA private key of the user to sign trade transactions."
       ),
     accountId: z
       .string()
@@ -797,25 +800,37 @@ async function mintTokens(
   authToken: string
 ) {
   try {
-    const response = await fetch(
-      `${API_BASE_URL}/tokens/${tokenCode.toLocaleUpperCase()}/mint`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({ amount }),
-      }
-    );
+    const url = `${API_BASE_URL}/tokens/${tokenCode.toUpperCase()}/mint`;
+    console.log("Attempting to mint tokens with:", {
+      url,
+      tokenCode,
+      amount,
+      hasAuthToken: !!authToken,
+    });
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ amount }),
+    });
+
+    console.log("Response status:", response.status);
+    console.log("Response status text:", response.statusText);
+
     if (!response.ok) {
-      console.error("Failed to mint tokens:", response.statusText);
+      const errorText = await response.text();
+      console.error("Failed to mint tokens. Response:", errorText);
       return null;
     }
+
     const data = await response.json();
+    console.log("Mint successful. Response:", data);
     return data;
   } catch (error) {
-    console.error(error);
+    console.error("Error in mintTokens:", error);
     return null;
   }
 }
@@ -921,8 +936,16 @@ async function main() {
       return;
     }
     console.log(authToken);
-    const mintTxn = await mintTokens("KCB", 10, authToken);
-    console.log(mintTxn);
+    const redeemTxn = await redeemTokens(
+      "KCB",
+      10,
+      authToken,
+      PrivateKey.fromStringDer(
+        "302e020100300506032b657004220420d1d6329a0d2295106943714c2a289e21d87f2257a55692a70be2d0a1d51c085c"
+      ),
+      "0.0.5802927",
+      "0.0.5784604"
+    );
     console.error("Neo MCP Server running on stdio");
   } catch (error) {
     console.error("Fatal error in main():", error);
