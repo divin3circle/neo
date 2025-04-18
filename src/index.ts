@@ -937,14 +937,14 @@ async function main() {
     }
     console.log(authToken);
     const redeemTxn = await redeemTokens(
-      "KCB",
-      10,
+      "SCOM",
+      1,
       authToken,
       PrivateKey.fromStringDer(
         "302e020100300506032b657004220420d1d6329a0d2295106943714c2a289e21d87f2257a55692a70be2d0a1d51c085c"
       ),
       "0.0.5802927",
-      "0.0.5784604"
+      "0.0.5784606"
     );
     console.error("Neo MCP Server running on stdio");
   } catch (error) {
