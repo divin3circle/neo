@@ -445,10 +445,21 @@ server.tool(
             action.token,
             action.amount,
             authToken,
-            PrivateKey.fromStringECDSA(privateKey),
+            PrivateKey.fromStringDer(privateKey),
             accountId,
             action.tokenId
           );
+          if (!redeemResponse) {
+            responseContent = "Failed to redeem tokens.";
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: responseContent,
+                },
+              ],
+            };
+          }
           return {
             content: [
               {
@@ -466,6 +477,17 @@ server.tool(
             accountId,
             privateKey
           );
+          if (!swapResponse) {
+            responseContent = "Failed to swap tokens.";
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: responseContent,
+                },
+              ],
+            };
+          }
           return {
             content: [
               {
@@ -1059,6 +1081,7 @@ async function main() {
   try {
     const transport = new StdioServerTransport();
     await server.connect(transport);
+
     console.error("Neo MCP Server running on stdio");
   } catch (error) {
     console.error("Fatal error in main():", error);
