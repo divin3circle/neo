@@ -30,12 +30,12 @@ Neo will perform a portfolio rebalance when one or more of the following conditi
 
 The steps for rebalancing is as follows but not restricted to:
 
-- Fetch current portfolio balances & their meta data via mirror node api
+- Fetch current portfolio balances from a user's Hedera account and broker portfolio
 - Compare the portfolio against user's target allocation or an AI model or both
 - Calculate required actions, swap over-presented tokens for USDC or other under-presented tokens
 - Estimate fees and slippage
 - Prepare and sign the transaction using Hedera Agent Kit with user's prior consent
-- Log the rebalancing action into memory
+- Log the rebalancing action into the user-agent or agent-agent private topic
 
 ### Minting/Redeeming
 

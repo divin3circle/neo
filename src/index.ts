@@ -1,19 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import {
-  CreateFTOptions,
-  CreateNFTOptions,
-  HederaAgentKit,
-  HederaNetworkType,
-} from "hedera-agent-kit";
+import { HederaAgentKit, HederaNetworkType } from "hedera-agent-kit";
 import {
   AccountId,
   Client,
   CustomFixedFee,
   Hbar,
   PrivateKey,
-  TokenId,
   TopicCreateTransaction,
   TransferTransaction,
 } from "@hashgraph/sdk";
@@ -22,12 +16,13 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // Constants that were previously in .env
-const ACCOUNT_ID = process.env.OPERATOR_ACCOUNT_ID;
-const DER_PRIVATE_KEY = process.env.OPERATOR_PRIVATE_KEY;
-const NETWORK = process.env.NETWORK;
-const MOCK_USDC = process.env.MOCK_USDC;
-const CUSTOM_FEE = process.env.CUSTOM_FEE;
-const API_BASE_URL = process.env.API_BASE_URL;
+const ACCOUNT_ID = "0.0.5483001";
+const DER_PRIVATE_KEY =
+  "a21d310e140357b2b623fe74a9499af53d8847b1fd0f0b23376ef76d2ea0bce0";
+const NETWORK = "testnet";
+const MOCK_USDC = "0.0.5791936";
+const CUSTOM_FEE = 5;
+const API_BASE_URL = "http://localhost:5004/api";
 
 if (
   !ACCOUNT_ID ||
@@ -40,8 +35,6 @@ if (
   throw new Error("Missing environment variables");
 }
 
-console.log("API_BASE_URL:", API_BASE_URL);
-
 const PRIVATE_KEY = PrivateKey.fromBytesECDSA(
   Buffer.from(DER_PRIVATE_KEY, "hex")
 );
@@ -50,14 +43,11 @@ let client = Client.forTestnet();
 
 client.setOperator(ACCOUNT_ID, PRIVATE_KEY);
 
-const TEST_EMAIL = "sylusabel4@example.com";
-const TEST_PASSWORD = "sam@2002";
-const TEST_USER_ID = "67e50b7ce4a9ae751ea2e999";
-
 const server = new McpServer({
   name: "neo",
   version: "0.1.0",
-  description: "Intelligent Portfolio Management Agent",
+  description:
+    "Intelligent Portfolio Management Agent to help user rebalance their on-chain portfolio. The agent can execute trading actions such as minting, redeeming and swapping to USDC of tokenized stock tokens based on the user's portfolio and the trends of the stocks & tokens he owns.",
   capabilities: {
     resources: {},
     tools: {},
@@ -99,6 +89,16 @@ interface MintTransactionResponse {
   };
 }
 
+interface Asset {
+  symbol: string;
+  value: number;
+}
+
+interface UserAsset {
+  symbol: string;
+  balance: number;
+}
+
 async function initializeHederaAgent(): Promise<HederaAgentKit> {
   try {
     return new HederaAgentKit(
@@ -119,33 +119,43 @@ server.tool(
   "Get the balances of all token holdings and stocks for a given portfolio",
   {
     userId: z.string().describe("Unique identifier for the portfolio"),
+    accountId: z.string().describe("Hedera account ID account id of the user"),
+    privateKey: z
+      .string()
+      .describe("DER encoded ECDSA private key of the user"),
+    userEmail: z.string().describe("User's email address"),
+    password: z.string().describe("Account password for the user"),
   },
-  async ({ userId }, extra) => {
+  async ({ userId, accountId, privateKey, userEmail, password }, extra) => {
     try {
       console.error("Fetching balances for user:", userId);
+      const publicKey = PrivateKey.fromStringECDSA(privateKey).publicKey;
 
       // Initialize Hedera agent
       console.error("Initializing Hedera agent...");
-      const hederaAgent = await initializeHederaAgent();
+      const hederaAgent = new HederaAgentKit(
+        accountId,
+        privateKey,
+        publicKey.toString(),
+        "testnet"
+      );
 
+      // TODO: Fetch token balances from the backend instead of the Hedera agent
       // Fetch token balances
       console.error("Fetching token balances...");
-      const rawTokenBalances = await hederaAgent.getAllTokensBalances(
-        NETWORK as HederaNetworkType
+      const tokenBalances = await fetchTokenBalances(
+        userId,
+        userEmail,
+        password
       );
-      const tokenBalances = rawTokenBalances.map((token) => ({
-        tokenId: token.tokenId,
-        balance: Number(token.balance),
-        symbol: token.tokenSymbol,
-      }));
       console.error(`Found ${tokenBalances.length} token balances`);
 
       // Fetch stock balances
       console.error("Fetching stock balances...");
       const stockBalances = await fetchStockBalances(
         userId,
-        TEST_EMAIL,
-        TEST_PASSWORD
+        userEmail,
+        password
       );
       console.error(`Found ${stockBalances.length} stock balances`);
 
@@ -202,42 +212,47 @@ server.tool(
 // Get the current value of the portfolio in KES
 server.tool(
   "get-portfolio-value",
-  "Get the current value of the portfolio",
+  "Get the current value of the portfolio. The value should be in KES and should be the sum of the current price of the stocks and tokens in the portfolio. Since the tokens are pegged to their  respective stocks, their value should be the current price of the stock they represent. ",
   {
     userId: z.string().describe("Unique identifier for the portfolio"),
+    userEmail: z.string().describe("User's email address"),
+    password: z.string().describe("Account password for the user"),
   },
-  async ({ userId }, extra) => {
+  async ({ userId, userEmail, password }, extra) => {
     try {
-      const hederaAgent = await initializeHederaAgent();
-
       console.error("Fetching token balances...");
-      const rawTokenBalances = await hederaAgent.getAllTokensBalances(
-        NETWORK as HederaNetworkType
+
+      const tokenBalances = await fetchTokenBalances(
+        userId,
+        userEmail,
+        password
       );
-      const tokenBalances = rawTokenBalances.map((token) => ({
-        tokenId: token.tokenId,
-        balance: Number(token.balance),
-        symbol: token.tokenSymbol,
-      }));
       console.error(`Found ${tokenBalances.length} token balances`);
 
       console.error("Fetching stock balances...");
       const stockBalances = await fetchStockBalances(
         userId,
-        TEST_EMAIL,
-        TEST_PASSWORD
+        userEmail,
+        password
       );
       console.log(stockBalances);
       console.log(tokenBalances);
       // map on each token and stock get't it current price and aggregate the data
       const assetValues = await getAssetValue([
-        ...stockBalances.map((stock) => stock.stockCode),
-        ...tokenBalances.map((token) => token.symbol),
+        ...stockBalances.map((stock) => ({
+          symbol: stock.stockCode,
+          balance: stock.quantity,
+        })),
+        ...tokenBalances.map((token) => ({
+          symbol: token.symbol,
+          balance: token.balance,
+        })),
       ]);
-      const totalValue = Object.values(assetValues).reduce(
-        (acc, curr) => acc + curr,
-        0
-      );
+      let totalValue = 0;
+
+      for (let i = 0; i < assetValues.length; i++) {
+        totalValue += assetValues[i].value;
+      }
       return {
         content: [
           {
@@ -375,7 +390,9 @@ server.tool(
       ),
     accountId: z
       .string()
-      .describe("The account id of the user to sign trade transactions."),
+      .describe(
+        "The Hedera account ID of the user to sign trade transactions."
+      ),
   },
   async ({ actions, email, password, privateKey, accountId }, extra) => {
     let responseContent;
@@ -432,12 +449,40 @@ server.tool(
             accountId,
             action.tokenId
           );
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Successfully redeemed ${action.amount} ${action.token} tokens`,
+                body: JSON.stringify(redeemResponse),
+              },
+            ],
+          };
+        } else if (action.type === "swap") {
+          const swapResponse = await swapForUSDC(
+            action.token,
+            action.amount,
+            authToken,
+            accountId,
+            privateKey
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Successfully swapped ${action.amount} ${action.token} tokens for USDC`,
+                body: JSON.stringify(swapResponse),
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [{ type: "text", text: "No action to execute" }],
+          };
         }
       }
       return {
-        content: [
-          { type: "text", text: "Successfully executed trading actions" },
-        ],
+        content: [{ type: "text", text: "No action to execute" }],
       };
     } catch (error) {
       console.error(error);
@@ -528,6 +573,56 @@ async function fetchStockBalances(
   }
 }
 
+async function fetchTokenBalances(
+  userId: string,
+  email: string,
+  password: string
+): Promise<
+  {
+    tokenId: string;
+    balance: number;
+    symbol: string;
+    name: string;
+    stockCode: string;
+  }[]
+> {
+  const authToken = await getAuthToken(email, password);
+  const authResponse = await fetch(`http://localhost:5004/api/auth/me`, {
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+      "Content-Type": "application/json",
+    },
+  }).catch((error) => {
+    console.error("Network error fetching user profile:", error);
+    return null;
+  });
+
+  if (!authResponse?.ok) {
+    console.error("Auth request failed with status:", authResponse?.status);
+    return [];
+  }
+
+  const authData = await authResponse.json().catch((error) => {
+    console.error("Error parsing auth response:", error);
+    return { user: { tokens: [] } };
+  });
+
+  const tokens = authData?.user?.tokens || [];
+
+  if (!Array.isArray(tokens)) {
+    console.error("Invalid stock holdings format:", tokens);
+    return [];
+  }
+
+  return tokens.map((holding: any) => ({
+    tokenId: holding.tokenId || "",
+    balance: Number(holding.balance) || 0,
+    symbol: holding.symbol || "",
+    name: holding.name || "",
+    stockCode: holding.stockCode || "",
+  }));
+}
+
 async function scrapStockPriceFromNse(symbol: string): Promise<number> {
   const url = `https://afx.kwayisi.org/chart/nse/${symbol}`;
   try {
@@ -565,26 +660,27 @@ async function scrapStockPriceFromNse(symbol: string): Promise<number> {
   }
 }
 
-async function getAssetValue(
-  assets: string[]
-): Promise<Record<string, number>> {
+async function getAssetValue(assets: UserAsset[]): Promise<Asset[]> {
   if (assets.length === 0) {
     console.log("No assets found.");
-    return {};
+    return [];
   }
-  let priceMap: Record<string, number> = {};
+  let assetsAndPrices: Asset[] = [];
 
   for (let i = 0; i < assets.length; i++) {
     const asset = assets[i];
-    let parsedAsset = asset;
-    if (asset.includes("&")) {
+    let parsedAsset = asset.symbol;
+    if (asset.symbol.includes("&")) {
       parsedAsset = "IMH";
     }
     const price = await scrapStockPriceFromNse(parsedAsset);
-    priceMap[asset] = price;
+    assetsAndPrices.push({
+      symbol: asset.symbol,
+      value: price * asset.balance,
+    });
   }
 
-  return priceMap;
+  return assetsAndPrices;
 }
 
 async function fetchMarketNews(symbol: string): Promise<MarketNews> {
@@ -925,27 +1021,44 @@ async function redeemTokens(
   }
 }
 
+async function swapForUSDC(
+  tokenCode: string,
+  amount: number,
+  authToken: string,
+  accountId: string,
+  privateKey: string
+) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/tokens/${tokenCode}/sell`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        amount,
+        accountId,
+        privateKey,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || "Failed to swap tokens");
+    }
+
+    const responseData = await response.json();
+    return responseData;
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
+}
+
 async function main() {
   try {
-    const hederaAgent = await initializeHederaAgent();
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    const authToken = await getAuthToken("js_cool@gmail.com", "sam@2002");
-    if (!authToken) {
-      console.error("Failed to get authenticate user.");
-      return;
-    }
-    console.log(authToken);
-    const redeemTxn = await redeemTokens(
-      "SCOM",
-      1,
-      authToken,
-      PrivateKey.fromStringDer(
-        "302e020100300506032b657004220420d1d6329a0d2295106943714c2a289e21d87f2257a55692a70be2d0a1d51c085c"
-      ),
-      "0.0.5802927",
-      "0.0.5784606"
-    );
     console.error("Neo MCP Server running on stdio");
   } catch (error) {
     console.error("Fatal error in main():", error);
