@@ -435,8 +435,7 @@ server.tool(
             content: [
               {
                 type: "text",
-                text: `Successfully minted ${action.amount} ${action.token} tokens`,
-                body: JSON.stringify(mintResponse),
+                text: JSON.stringify(mintResponse),
               },
             ],
           };
@@ -464,8 +463,7 @@ server.tool(
             content: [
               {
                 type: "text",
-                text: `Successfully redeemed ${action.amount} ${action.token} tokens`,
-                body: JSON.stringify(redeemResponse),
+                text: JSON.stringify(redeemResponse),
               },
             ],
           };
@@ -492,8 +490,7 @@ server.tool(
             content: [
               {
                 type: "text",
-                text: `Successfully swapped ${action.amount} ${action.token} tokens for USDC`,
-                body: JSON.stringify(swapResponse),
+                text: JSON.stringify(swapResponse),
               },
             ],
           };
