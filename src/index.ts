@@ -330,7 +330,7 @@ server.tool(
 // The report will be used by the next tool to make the necessary actions
 server.tool(
   "generate-report",
-  "Use Brave Search to generate a report and recommended actions(mint, redeem or swap for USDC) for the user based on the portfolio and the trends. The report should include the action needed, the rationale behind it, and the amount of token to be redeemed swapped or minted.",
+  "Use Brave Search to generate a brief report and recommended actions(mint, redeem or swap for USDC) for the user based on the portfolio and the trends. The report should include the action needed, the rationale behind it, and the amount of token to be redeemed swapped or minted. If a market sentiment is negative or neutral/negative mint action then a swap actions of the token to USDC action, if a market sentiment is positive suggest a mint action or a swap action from USDC to the token.",
   {
     stockCodes: z.array(z.string()).describe("Stock codes owned by the user"),
   },
@@ -359,7 +359,7 @@ server.tool(
 // Make the necessary actions based on the report
 server.tool(
   "execute-trading-actions",
-  "Use Hedera Agent Kit to execute the trading actions based on the report or by a user's request",
+  "Use Hedera Agent Kit to execute the trading actions based on the report or by a user's request.",
   {
     actions: z
       .array(
