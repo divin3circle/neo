@@ -24,7 +24,8 @@ const PRIVATE_KEY = PrivateKey.fromBytesECDSA(
 );
 const PUBLIC_KEY = PRIVATE_KEY.publicKey;
 const BRAVE_API_KEY = "BSACEBx42fdjEYy1bZ2mcgvO1GLT9Fv";
-const EXCHANGE_RATE = 129.69;
+const EXCHANGE_RATE_URL =
+  "https://www.xe.com/api/protected/statistics/?from=USD&to=KES";
 
 /** BINANCE PRICE URL */
 const binancePriceUrl = `https://api.binance.com/api/v3/ticker/price?symbol=`;
@@ -96,6 +97,26 @@ export interface TokenBalance {
 export interface PriceFromBinance {
   symbol: string;
   price: string;
+}
+
+interface TimeSeriesStats {
+  to: string;
+  high: number;
+  low: number;
+  average: number;
+  standardDeviation: number;
+  volatility: number;
+  highTimestamp: string;
+  lowTimestamp: string;
+  dataPoints: number;
+}
+
+interface TimeSeriesData {
+  last1Days: TimeSeriesStats;
+  last7Days: TimeSeriesStats;
+  last30Days: TimeSeriesStats;
+  last60Days: TimeSeriesStats;
+  last90Days: TimeSeriesStats;
 }
 
 /** HELPER FUNCTIONS */
@@ -341,6 +362,19 @@ export async function getAssetValue(assets: UserAsset[]): Promise<Asset[]> {
   return assetsAndPrices;
 }
 
+export async function getExchangeRate(): Promise<number> {
+  try {
+    const response = await fetch(EXCHANGE_RATE_URL);
+    if (!response.ok) {
+      return 129.65;
+    }
+    const data: TimeSeriesData = await response.json();
+    return data.last1Days.average;
+  } catch (error) {
+    return 129.69;
+  }
+}
+
 export async function getNativeTokenPrice(
   assets: UserAsset[]
 ): Promise<Asset[]> {
@@ -360,7 +394,7 @@ export async function getNativeTokenPrice(
     const price = Number(priceData.price);
     assetsAndPrices.push({
       symbol: assets[i].symbol,
-      value: price * assets[i].balance * EXCHANGE_RATE,
+      value: price * assets[i].balance * (await getExchangeRate()),
     });
   }
   return assetsAndPrices;
