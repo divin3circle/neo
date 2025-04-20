@@ -1,21 +1,27 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { HederaAgentKit, HederaNetworkType } from "hedera-agent-kit";
-import {
-  AccountId,
-  Client,
-  CustomFixedFee,
-  Hbar,
-  PrivateKey,
-  TopicCreateTransaction,
-  TransferTransaction,
-} from "@hashgraph/sdk";
+import { HederaAgentKit } from "hedera-agent-kit";
+import { Client, PrivateKey, TransactionReceipt } from "@hashgraph/sdk";
 import dotenv from "dotenv";
+import {
+  getAuthToken,
+  fetchStockBalances,
+  fetchTokenBalances,
+  getAssetValue,
+  fetchMarketNews,
+  generateReport,
+  mintTokens,
+  redeemTokens,
+  swapForUSDC,
+  MarketNews,
+  createTopic,
+  submitMessage,
+  hcsManager,
+} from "./helpers.js";
 
 dotenv.config();
 
-// Constants that were previously in .env
 const ACCOUNT_ID = "0.0.5483001";
 const DER_PRIVATE_KEY =
   "a21d310e140357b2b623fe74a9499af53d8847b1fd0f0b23376ef76d2ea0bce0";
@@ -38,7 +44,6 @@ if (
 const PRIVATE_KEY = PrivateKey.fromBytesECDSA(
   Buffer.from(DER_PRIVATE_KEY, "hex")
 );
-const PUBLIC_KEY = PRIVATE_KEY.publicKey;
 let client = Client.forTestnet();
 
 client.setOperator(ACCOUNT_ID, PRIVATE_KEY);
@@ -49,71 +54,38 @@ const server = new McpServer({
   description:
     "Intelligent Portfolio Management Agent to help user rebalance their on-chain portfolio. The agent can execute trading actions such as minting, redeeming and swapping to USDC of tokenized stock tokens based on the user's portfolio and the trends of the stocks & tokens he owns.",
   capabilities: {
-    resources: {},
-    tools: {},
+    tools: {
+      "get-balances": true,
+      "get-portfolio-value": true,
+      "compare-portfolio-with-trends": true,
+      "generate-report": true,
+      "execute-trading-actions": true,
+    },
   },
 });
 
-interface NewsItem {
-  title: string;
-  description: string;
-  url: string;
-  publishTime: string;
-  sentiment: "positive" | "negative" | "neutral";
-}
-
-interface MarketNews {
-  symbol: string;
-  news: NewsItem[];
-  overallSentiment: "positive" | "negative" | "neutral";
-  summary: string[];
-}
-
-interface MintTransactionResponse {
-  message: string;
-  transaction: {
-    userId: string;
-    tokenId: string;
-    stockCode: string;
-    amount: number;
-    hederaTransactionId: string;
-    type: "MINT" | "REDEEM" | "SWAP";
-    status: "COMPLETED" | "PENDING" | "FAILED" | string;
-    fee: number;
-    paymentTokenId: string;
-    paymentAmount: number;
-    _id: string;
-    createdAt: string;
-    updatedAt: string;
-    __v: number;
-  };
-}
-
-interface Asset {
-  symbol: string;
-  value: number;
-}
-
-interface UserAsset {
-  symbol: string;
-  balance: number;
-}
-
-async function initializeHederaAgent(): Promise<HederaAgentKit> {
-  try {
-    return new HederaAgentKit(
-      ACCOUNT_ID!,
-      PRIVATE_KEY.toString(),
-      PUBLIC_KEY.toString(),
-      NETWORK! as HederaNetworkType
-    );
-  } catch (error) {
-    console.error("Error initializing Hedera Agent Kit:", error);
-    throw error;
-  }
-}
-
-// Get the balances of all token holdings and stocks for a given portfolio
+/**
+ * Get the balances of all token holdings and stocks for a given portfolio.
+ * @param userId - Unique identifier for the portfolio
+ * @param accountId - Hedera account ID of the user
+ * @param privateKey - DER encoded ECDSA private key of the user
+ * @param userEmail - User's email address
+ * @param password - Account password for the user
+ * @param topicId - The topic id to submit the message to. If not provided, a new topic will be created.
+ * @returns Promise<{content: Array<{type: string, text: string}>}> - Portfolio balances and transaction details
+ * @throws Error - If authentication fails or data fetching fails
+ * @side-effects - Makes HTTP requests to fetch balances and creates HCS message
+ * @performance - O(n) where n is number of holdings
+ * @example
+ * const balances = await getBalances({
+ *   userId: "user123",
+ *   accountId: "0.0.123",
+ *   privateKey: "private-key",
+ *   userEmail: "user@example.com",
+ *   password: "password123",
+ *   topicId: "0.0.456"
+ * });
+ */
 server.tool(
   "get-balances",
   "Get the balances of all token holdings and stocks for a given portfolio",
@@ -125,14 +97,19 @@ server.tool(
       .describe("DER encoded ECDSA private key of the user"),
     userEmail: z.string().describe("User's email address"),
     password: z.string().describe("Account password for the user"),
+    topicId: z
+      .string()
+      .optional()
+      .describe(
+        "The topic id to submit the message to. If not provided or not in memory, a new topic will be created."
+      ),
   },
-  async ({ userId, accountId, privateKey, userEmail, password }, extra) => {
+  async (
+    { userId, accountId, privateKey, userEmail, password, topicId },
+    extra
+  ) => {
     try {
-      console.error("Fetching balances for user:", userId);
       const publicKey = PrivateKey.fromStringECDSA(privateKey).publicKey;
-
-      // Initialize Hedera agent
-      console.error("Initializing Hedera agent...");
       const hederaAgent = new HederaAgentKit(
         accountId,
         privateKey,
@@ -140,26 +117,40 @@ server.tool(
         "testnet"
       );
 
-      // TODO: Fetch token balances from the backend instead of the Hedera agent
-      // Fetch token balances
-      console.error("Fetching token balances...");
       const tokenBalances = await fetchTokenBalances(
         userId,
         userEmail,
         password
       );
-      console.error(`Found ${tokenBalances.length} token balances`);
 
-      // Fetch stock balances
-      console.error("Fetching stock balances...");
+      if (!tokenBalances || tokenBalances.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Warning: No token balances found or failed to fetch token balances",
+            },
+          ],
+        };
+      }
+
       const stockBalances = await fetchStockBalances(
         userId,
         userEmail,
         password
       );
-      console.error(`Found ${stockBalances.length} stock balances`);
 
-      // Aggregate the data
+      if (!stockBalances || stockBalances.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Warning: No stock balances found or failed to fetch stock balances",
+            },
+          ],
+        };
+      }
+
       const portfolioData = {
         tokens: tokenBalances.map((token) => ({
           tokenId: token.tokenId,
@@ -173,6 +164,34 @@ server.tool(
         })),
         lastUpdated: new Date().toISOString(),
       };
+
+      const usdcBalance = await hederaAgent.getHtsBalance(
+        "0.0.5791936",
+        NETWORK
+      );
+
+      if (usdcBalance < 1) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Insufficient USDC balance for transaction",
+            },
+          ],
+        };
+      }
+
+      const balanceMessage = `Fetched portfolio balances for ${userId} on ${new Date().toISOString()}. Costed 1 USDC, remaining balance: ${
+        usdcBalance - 1
+      } USDC`;
+
+      const hcsManagerResponse = await hcsManager(
+        topicId,
+        balanceMessage,
+        accountId,
+        privateKey,
+        userId
+      );
 
       return {
         content: [
@@ -191,17 +210,28 @@ server.tool(
               details: portfolioData,
             }),
           },
+          {
+            type: "text",
+            text: JSON.stringify(hcsManagerResponse),
+          },
+          {
+            type: "text",
+            text: `Remaining balance: ${usdcBalance - 1} USDC`,
+          },
         ],
       };
     } catch (error) {
-      console.error("Error fetching balances:", error);
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
+      const errorCode =
+        error instanceof Error && "code" in error
+          ? (error as any).code
+          : "UNKNOWN";
       return {
         content: [
           {
             type: "text",
-            text: `Error fetching balances: ${errorMessage}`,
+            text: `Error fetching balances: ${errorMessage} (Code: ${errorCode})`,
           },
         ],
       };
@@ -209,7 +239,28 @@ server.tool(
   }
 );
 
-// Get the current value of the portfolio in KES
+/**
+ * Get the current value of the portfolio in KES.
+ * @param userId - Unique identifier for the portfolio
+ * @param userEmail - User's email address
+ * @param password - Account password for the user
+ * @param accountId - Hedera account ID of the user
+ * @param privateKey - DER encoded ECDSA private key of the user
+ * @param topicId - The topic id to submit the message to. If not provided, a new topic will be created.
+ * @returns Promise<{content: Array<{type: string, text: string}>}> - Portfolio value and transaction details
+ * @throws Error - If authentication fails or price fetching fails
+ * @side-effects - Makes HTTP requests to fetch prices and creates HCS message
+ * @performance - O(n) where n is number of assets
+ * @example
+ * const value = await getPortfolioValue({
+ *   userId: "user123",
+ *   userEmail: "user@example.com",
+ *   password: "password123",
+ *   accountId: "0.0.123",
+ *   privateKey: "private-key",
+ *   topicId: "0.0.456"
+ * });
+ */
 server.tool(
   "get-portfolio-value",
   "Get the current value of the portfolio. The value should be in KES and should be the sum of the current price of the stocks and tokens in the portfolio. Since the tokens are pegged to their  respective stocks, their value should be the current price of the stock they represent. ",
@@ -217,42 +268,104 @@ server.tool(
     userId: z.string().describe("Unique identifier for the portfolio"),
     userEmail: z.string().describe("User's email address"),
     password: z.string().describe("Account password for the user"),
+    accountId: z.string().describe("Hedera account ID account id of the user"),
+    privateKey: z
+      .string()
+      .describe("DER encoded ECDSA private key of the user"),
+    topicId: z
+      .string()
+      .optional()
+      .describe(
+        "The topic id to submit the message to. If not provided or not in memory, a new topic will be created."
+      ),
   },
-  async ({ userId, userEmail, password }, extra) => {
+  async (
+    { userId, userEmail, password, accountId, privateKey, topicId },
+    extra
+  ) => {
     try {
-      console.error("Fetching token balances...");
-
       const tokenBalances = await fetchTokenBalances(
         userId,
         userEmail,
         password
       );
-      console.error(`Found ${tokenBalances.length} token balances`);
 
-      console.error("Fetching stock balances...");
+      if (!tokenBalances || tokenBalances.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Warning: No token balances found or failed to fetch token balances",
+            },
+          ],
+        };
+      }
+
       const stockBalances = await fetchStockBalances(
         userId,
         userEmail,
         password
       );
-      console.log(stockBalances);
-      console.log(tokenBalances);
-      // map on each token and stock get't it current price and aggregate the data
+
+      if (!stockBalances || stockBalances.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Warning: No stock balances found or failed to fetch stock balances",
+            },
+          ],
+        };
+      }
+
       const assetValues = await getAssetValue([
-        ...stockBalances.map((stock) => ({
-          symbol: stock.stockCode,
-          balance: stock.quantity,
-        })),
-        ...tokenBalances.map((token) => ({
+        ...stockBalances.map(
+          (stock: { stockCode: string; quantity: number }) => ({
+            symbol: stock.stockCode,
+            balance: stock.quantity,
+          })
+        ),
+        ...tokenBalances.map((token: { symbol: string; balance: number }) => ({
           symbol: token.symbol,
           balance: token.balance,
         })),
       ]);
-      let totalValue = 0;
 
+      if (!assetValues || assetValues.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Failed to fetch current asset values",
+            },
+          ],
+        };
+      }
+
+      let totalValue = 0;
       for (let i = 0; i < assetValues.length; i++) {
+        if (assetValues[i].value < 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error: Invalid negative value for asset ${assetValues[i].symbol}`,
+              },
+            ],
+          };
+        }
         totalValue += assetValues[i].value;
       }
+
+      const valueMessage = `Aggregated portfolio value for ${userId} on ${new Date().toISOString()} is ${totalValue} KES`;
+      const hcsManagerResponse = await hcsManager(
+        topicId,
+        valueMessage,
+        accountId,
+        privateKey,
+        userId
+      );
+
       return {
         content: [
           {
@@ -263,18 +376,24 @@ server.tool(
             type: "text",
             text: `Total value of the portfolio is ${totalValue}`,
           },
+          {
+            type: "text",
+            text: JSON.stringify(hcsManagerResponse),
+          },
         ],
       };
     } catch (error) {
-      console.error(error);
-      console.error("Error fetching balances:", error);
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
+      const errorCode =
+        error instanceof Error && "code" in error
+          ? (error as any).code
+          : "UNKNOWN";
       return {
         content: [
           {
             type: "text",
-            text: `Error fetching balances: ${errorMessage}`,
+            text: `Error calculating portfolio value: ${errorMessage} (Code: ${errorCode})`,
           },
         ],
       };
@@ -282,14 +401,44 @@ server.tool(
   }
 );
 
-// Compare current user portfolio with the trends of the stocks & tokens he owns
+/**
+ * Compare current user portfolio with the trends of the stocks & tokens he owns.
+ * @param stockCodes - Array of stock codes owned by the user
+ * @param accountId - Hedera account ID of the user
+ * @param privateKey - DER encoded ECDSA private key of the user
+ * @param topicId - The topic id to submit the message to. If not provided, a new topic will be created.
+ * @param userId - Unique identifier for the portfolio
+ * @returns Promise<{content: Array<{type: string, text: string}>}> - Market trends analysis and transaction details
+ * @throws Error - If news fetching fails
+ * @side-effects - Makes HTTP requests to fetch news and creates HCS message
+ * @performance - O(n) where n is number of stock codes
+ * @example
+ * const trends = await comparePortfolioWithTrends({
+ *   stockCodes: ["KCB", "SCOM"],
+ *   accountId: "0.0.123",
+ *   privateKey: "private-key",
+ *   topicId: "0.0.456",
+ *   userId: "user123"
+ * });
+ */
 server.tool(
   "compare-portfolio-with-trends",
   "Use Brave Search to get the latest news and trends of the stocks & tokens he owns and compare it with the current portfolio",
   {
     stockCodes: z.array(z.string()).describe("Stock codes owned by the user"),
+    accountId: z.string().describe("Hedera account ID account id of the user"),
+    privateKey: z
+      .string()
+      .describe("DER encoded ECDSA private key of the user"),
+    topicId: z
+      .string()
+      .optional()
+      .describe(
+        "The topic id to submit the message to. If not provided or not in memory, a new topic will be created."
+      ),
+    userId: z.string().describe("Unique identifier for the portfolio"),
   },
-  async ({ stockCodes }, extra) => {
+  async ({ stockCodes, accountId, privateKey, topicId, userId }, extra) => {
     let stockDetailsMap: Record<string, MarketNews> = {};
     try {
       for (let i = 0; i < stockCodes.length; i++) {
@@ -297,7 +446,6 @@ server.tool(
         stockDetailsMap[stockCodes[i]] = stockDetails;
       }
     } catch (error) {
-      console.error(error);
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       return {
@@ -309,6 +457,16 @@ server.tool(
         ],
       };
     }
+
+    const comparisonMessage = `Comparison of the user portfolio with the trends of the stocks & tokens he owns for ${userId} on ${new Date().toISOString()}`;
+
+    const hcsManagerResponse = await hcsManager(
+      topicId,
+      comparisonMessage,
+      accountId,
+      privateKey,
+      userId
+    );
     return {
       content: [
         {
@@ -319,29 +477,70 @@ server.tool(
           type: "text",
           text: JSON.stringify(stockDetailsMap),
         },
+        {
+          type: "text",
+          text: JSON.stringify(hcsManagerResponse),
+        },
       ],
     };
   }
 );
 
-// Generate a report and recommended actions(mint, redeem or swap for USDC) for the user based on the portfolio and the trends
-// The conclusion should include they action needed, the rationale behind it, and the amount of token to be redeemed swapped or minted
-// E.g if KCB is trending upwards and SCOM downwards, the report should recommend the user to swap SCOM to USDC then swap the USDC to KCB
-// The report will be used by the next tool to make the necessary actions
+/**
+ * Generate a report and recommended actions for the user based on the portfolio and the trends.
+ * @param stockCodes - Array of stock codes owned by the user
+ * @param accountId - Hedera account ID of the user
+ * @param privateKey - DER encoded ECDSA private key of the user
+ * @param topicId - The topic id to submit the message to. If not provided, a new topic will be created.
+ * @param userId - Unique identifier for the portfolio
+ * @returns Promise<{content: Array<{type: string, text: string}>}> - Report with recommendations and transaction details
+ * @throws Error - If report generation fails
+ * @side-effects - Makes HTTP requests to fetch news and creates HCS message
+ * @performance - O(n) where n is number of stock codes
+ * @example
+ * const report = await generateReport({
+ *   stockCodes: ["KCB", "SCOM"],
+ *   accountId: "0.0.123",
+ *   privateKey: "private-key",
+ *   topicId: "0.0.456",
+ *   userId: "user123"
+ * });
+ */
 server.tool(
   "generate-report",
   "Use Brave Search to generate a brief report and recommended actions(mint, redeem or swap for USDC) for the user based on the portfolio and the trends. The report should include the action needed, the rationale behind it, and the amount of token to be redeemed swapped or minted. If a market sentiment is negative or neutral/negative mint action then a swap actions of the token to USDC action, if a market sentiment is positive suggest a mint action or a swap action from USDC to the token.",
   {
     stockCodes: z.array(z.string()).describe("Stock codes owned by the user"),
+    accountId: z.string().describe("Hedera account ID account id of the user"),
+    privateKey: z
+      .string()
+      .describe("DER encoded ECDSA private key of the user"),
+    topicId: z
+      .string()
+      .optional()
+      .describe(
+        "The topic id to submit the message to. If not provided or not in memory, a new topic will be created."
+      ),
+    userId: z.string().describe("Unique identifier for the portfolio"),
   },
-  async ({ stockCodes }, extra) => {
+  async ({ stockCodes, accountId, privateKey, topicId, userId }, extra) => {
     try {
       const news = await generateReport(stockCodes);
+      const reportMessage = `Report and recommended actions for ${userId} on ${new Date().toISOString()}`;
+      const hcsManagerResponse = await hcsManager(
+        topicId,
+        reportMessage,
+        accountId,
+        privateKey,
+        userId
+      );
       return {
-        content: [{ type: "text", text: JSON.stringify(news) }],
+        content: [
+          { type: "text", text: JSON.stringify(news) },
+          { type: "text", text: JSON.stringify(hcsManagerResponse) },
+        ],
       };
     } catch (error) {
-      console.error(error);
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       return {
@@ -356,7 +555,37 @@ server.tool(
   }
 );
 
-// Make the necessary actions based on the report
+/**
+ * Execute trading actions based on the report or user's request.
+ * @param actions - Array of actions to be executed (mint, redeem, or swap)
+ * @param email - User's email for authentication
+ * @param password - User's password for authentication
+ * @param privateKey - DER encoded ECDSA private key for transaction signing
+ * @param accountId - Hedera account ID for transaction signing
+ * @param topicId - The topic id to submit the message to. If not provided, a new topic will be created.
+ * @param userId - Unique identifier for the portfolio
+ * @returns Promise<{content: Array<{type: string, text: string}>}> - Transaction results and details
+ * @throws Error - If authentication fails or transaction execution fails
+ * @side-effects - Creates blockchain transactions and HCS messages
+ * @performance - O(n) where n is number of actions
+ * @example
+ * const results = await executeTradingActions({
+ *   actions: [{
+ *     type: "mint",
+ *     token: "KCB",
+ *     tokenId: "0.0.789",
+ *     amount: 100,
+ *     rationale: "Positive market sentiment",
+ *     targetToken: "USDC"
+ *   }],
+ *   email: "user@example.com",
+ *   password: "password123",
+ *   privateKey: "private-key",
+ *   accountId: "0.0.123",
+ *   topicId: "0.0.456",
+ *   userId: "user123"
+ * });
+ */
 server.tool(
   "execute-trading-actions",
   "Use Hedera Agent Kit to execute the trading actions based on the report or by a user's request.",
@@ -375,7 +604,7 @@ server.tool(
             .number()
             .describe("The amount of token to be minted, redeemed or swapped"),
           rationale: z.string().describe("The rationale behind the action"),
-          targetToken: z.string().describe("The token to be swapped to"), // only used when type is swap
+          targetToken: z.string().describe("The token to be swapped to"),
         })
       )
       .describe("The actions to be executed"),
@@ -393,13 +622,22 @@ server.tool(
       .describe(
         "The Hedera account ID of the user to sign trade transactions."
       ),
+    topicId: z
+      .string()
+      .optional()
+      .describe(
+        "The topic id to submit the message to. If not provided or not in memory, a new topic will be created."
+      ),
+    userId: z.string().describe("Unique identifier for the portfolio"),
   },
-  async ({ actions, email, password, privateKey, accountId }, extra) => {
+  async (
+    { actions, email, password, privateKey, accountId, topicId, userId },
+    extra
+  ) => {
     let responseContent;
     try {
       const authToken = await getAuthToken(email, password);
       if (!authToken) {
-        console.log("Failed to get authenticate user.");
         responseContent =
           "Couldn't safely authenticate you with the email provided.";
         return {
@@ -415,11 +653,12 @@ server.tool(
         const action = actions[i];
         if (action.type === "mint") {
           // call our backend to mint the required tokens
-          const mintResponse: MintTransactionResponse = await mintTokens(
+          const mintResponse = await mintTokens(
             action.token,
             action.amount,
             authToken
           );
+
           if (!mintResponse) {
             responseContent = "Failed to mint tokens.";
             return {
@@ -431,11 +670,35 @@ server.tool(
               ],
             };
           }
+
+          const mintMessage = `Minted ${action.amount} ${
+            action.token
+          } tokens for ${userId} on ${new Date().toISOString()}`;
+          const hcsManagerResponse = await hcsManager(
+            topicId,
+            mintMessage,
+            accountId,
+            privateKey,
+            userId
+          );
           return {
             content: [
               {
                 type: "text",
-                text: JSON.stringify(mintResponse),
+                text: JSON.stringify({
+                  message: mintResponse.message,
+                  transaction: {
+                    tokenId: mintResponse.transaction.tokenId,
+                    amount: mintResponse.transaction.amount,
+                    status: mintResponse.transaction.status,
+                    hederaTransactionId:
+                      mintResponse.transaction.hederaTransactionId,
+                  },
+                }),
+              },
+              {
+                type: "text",
+                text: JSON.stringify(hcsManagerResponse),
               },
             ],
           };
@@ -459,11 +722,25 @@ server.tool(
               ],
             };
           }
+          const redeemMessage = `Redeemed ${action.amount} ${
+            action.token
+          } tokens for ${userId} on ${new Date().toISOString()}`;
+          const hcsManagerResponse = await hcsManager(
+            topicId,
+            redeemMessage,
+            accountId,
+            privateKey,
+            userId
+          );
           return {
             content: [
               {
                 type: "text",
                 text: JSON.stringify(redeemResponse),
+              },
+              {
+                type: "text",
+                text: JSON.stringify(hcsManagerResponse),
               },
             ],
           };
@@ -486,25 +763,60 @@ server.tool(
               ],
             };
           }
+          const swapMessage = `Swapped ${action.amount} ${
+            action.token
+          } for USDC for ${userId} on ${new Date().toISOString()}`;
+          const hcsManagerResponse = await hcsManager(
+            topicId,
+            swapMessage,
+            accountId,
+            privateKey,
+            userId
+          );
           return {
             content: [
               {
                 type: "text",
                 text: JSON.stringify(swapResponse),
               },
+              {
+                type: "text",
+                text: JSON.stringify(hcsManagerResponse),
+              },
             ],
           };
         } else {
+          const noActionMessage = `No action to execute for ${userId} on ${new Date().toISOString()}`;
+          const hcsManagerResponse = await hcsManager(
+            topicId,
+            noActionMessage,
+            accountId,
+            privateKey,
+            userId
+          );
           return {
-            content: [{ type: "text", text: "No action to execute" }],
+            content: [
+              { type: "text", text: "No action to execute" },
+              { type: "text", text: JSON.stringify(hcsManagerResponse) },
+            ],
           };
         }
       }
+      const noActionMessage = `No action to execute for ${userId} on ${new Date().toISOString()}`;
+      const hcsManagerResponse = await hcsManager(
+        topicId,
+        noActionMessage,
+        accountId,
+        privateKey,
+        userId
+      );
       return {
-        content: [{ type: "text", text: "No action to execute" }],
+        content: [
+          { type: "text", text: "No action to execute" },
+          { type: "text", text: JSON.stringify(hcsManagerResponse) },
+        ],
       };
     } catch (error) {
-      console.error(error);
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       return {
@@ -519,574 +831,15 @@ server.tool(
   }
 );
 
-// Helper functions
-async function fetchStockBalances(
-  userId: string,
-  email: string,
-  password: string
-): Promise<{ stockCode: string; quantity: number; lockedQuantity: number }[]> {
-  try {
-    console.error("Attempting to fetch stock balances...");
-
-    const loginResponse = await fetch(`http://localhost:5004/api/auth/login`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ email, password }),
-    }).catch((error) => {
-      console.error("Network error during login:", error);
-      throw new Error("Failed to connect to authentication service");
-    });
-
-    if (!loginResponse.ok) {
-      console.error("Login failed with status:", loginResponse.status);
-      return [];
-    }
-
-    const loginData = await loginResponse.json().catch((error) => {
-      console.error("Error parsing login response:", error);
-      return { token: null };
-    });
-
-    if (!loginData.token) {
-      console.error("No token received in login response");
-      return [];
-    }
-
-    const authResponse = await fetch(`http://localhost:5004/api/auth/me`, {
-      headers: {
-        Authorization: `Bearer ${loginData.token}`,
-        "Content-Type": "application/json",
-      },
-    }).catch((error) => {
-      console.error("Network error fetching user profile:", error);
-      return null;
-    });
-
-    if (!authResponse?.ok) {
-      console.error("Auth request failed with status:", authResponse?.status);
-      return [];
-    }
-
-    const authData = await authResponse.json().catch((error) => {
-      console.error("Error parsing auth response:", error);
-      return { user: { stockHoldings: [] } };
-    });
-
-    const stocks = authData?.user?.stockHoldings || [];
-
-    if (!Array.isArray(stocks)) {
-      console.error("Invalid stock holdings format:", stocks);
-      return [];
-    }
-
-    return stocks.map((holding: any) => ({
-      stockCode: holding.stockCode || "",
-      quantity: Number(holding.quantity) || 0,
-      lockedQuantity: Number(holding.lockedQuantity) || 0,
-    }));
-  } catch (error) {
-    console.error("Error in fetchStockBalances:", error);
-    return [];
-  }
-}
-
-async function fetchTokenBalances(
-  userId: string,
-  email: string,
-  password: string
-): Promise<
-  {
-    tokenId: string;
-    balance: number;
-    symbol: string;
-    name: string;
-    stockCode: string;
-  }[]
-> {
-  const authToken = await getAuthToken(email, password);
-  const authResponse = await fetch(`http://localhost:5004/api/auth/me`, {
-    headers: {
-      Authorization: `Bearer ${authToken}`,
-      "Content-Type": "application/json",
-    },
-  }).catch((error) => {
-    console.error("Network error fetching user profile:", error);
-    return null;
-  });
-
-  if (!authResponse?.ok) {
-    console.error("Auth request failed with status:", authResponse?.status);
-    return [];
-  }
-
-  const authData = await authResponse.json().catch((error) => {
-    console.error("Error parsing auth response:", error);
-    return { user: { tokens: [] } };
-  });
-
-  const tokens = authData?.user?.tokens || [];
-
-  if (!Array.isArray(tokens)) {
-    console.error("Invalid stock holdings format:", tokens);
-    return [];
-  }
-
-  return tokens.map((holding: any) => ({
-    tokenId: holding.tokenId || "",
-    balance: Number(holding.balance) || 0,
-    symbol: holding.symbol || "",
-    name: holding.name || "",
-    stockCode: holding.stockCode || "",
-  }));
-}
-
-async function scrapStockPriceFromNse(symbol: string): Promise<number> {
-  const url = `https://afx.kwayisi.org/chart/nse/${symbol}`;
-  try {
-    // fetch the html page
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const html = await res.text();
-    // 2. Regex‑extract the contents of `series[0].data = [ ... ]`
-    //    We capture everything between data:[   HERE   ]
-    const dataBlockMatch = html.match(
-      /series\s*:\s*\[\{[^]*?data\s*:\s*\[([\s\S]+?)\]\s*\}/
-    );
-    if (!dataBlockMatch) {
-      throw new Error("Could not find Highcharts data array");
-    }
-    const rawData = dataBlockMatch[1];
-
-    // 3. Find all [d("DATE"), PRICE] pairs
-    const pairRE = /\[d\("([^"]+)"\)\s*,\s*([\d.]+)\]/g;
-    const pairs = Array.from(rawData.matchAll(pairRE)).map((m) => ({
-      date: m[1], // e.g. "2025-04-16"
-      price: parseFloat(m[2]), // e.g. 44.1
-    }));
-
-    if (pairs.length === 0) {
-      throw new Error("No data points parsed");
-    }
-
-    // 4. The last entry is the most recent
-    const latest = pairs[pairs.length - 1];
-    return latest.price;
-  } catch (error) {
-    console.error("Error scraping stock price from NSE:", error);
-    return -1;
-  }
-}
-
-async function getAssetValue(assets: UserAsset[]): Promise<Asset[]> {
-  if (assets.length === 0) {
-    console.log("No assets found.");
-    return [];
-  }
-  let assetsAndPrices: Asset[] = [];
-
-  for (let i = 0; i < assets.length; i++) {
-    const asset = assets[i];
-    let parsedAsset = asset.symbol;
-    if (asset.symbol.includes("&")) {
-      parsedAsset = "IMH";
-    }
-    const price = await scrapStockPriceFromNse(parsedAsset);
-    assetsAndPrices.push({
-      symbol: asset.symbol,
-      value: price * asset.balance,
-    });
-  }
-
-  return assetsAndPrices;
-}
-
-async function fetchMarketNews(symbol: string): Promise<MarketNews> {
-  try {
-    console.error(`Fetching news for ${symbol}...`);
-    const searchQuery = `NSE:${symbol} stock Nairobi Securities Exchange Kenya company news.`;
-    const url = `https://api.search.brave.com/res/v1/news/search?q=${encodeURIComponent(
-      searchQuery
-    )}`;
-
-    const headers = {
-      Accept: "application/json",
-      "Accept-Encoding": "gzip",
-      "X-Subscription-Token":
-        process.env.BRAVE_API_KEY || "BSACEBx42fdjEYy1bZ2mcgvO1GLT9Fv",
-    };
-
-    const response = await fetch(url, { headers });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-    const data = await response.json();
-    const newsItems: NewsItem[] = [];
-    let positiveCount = 0;
-    let negativeCount = 0;
-
-    // Keywords for sentiment analysis
-    const positiveKeywords = [
-      "growth",
-      "profit",
-      "increase",
-      "rise",
-      "gain",
-      "positive",
-      "success",
-      "strong",
-      "improve",
-    ];
-    const negativeKeywords = [
-      "loss",
-      "decline",
-      "decrease",
-      "fall",
-      "negative",
-      "weak",
-      "poor",
-      "risk",
-      "concern",
-    ];
-
-    // Process each news item
-    for (const item of data.results || []) {
-      // Simple sentiment analysis based on keywords
-      let sentiment: "positive" | "negative" | "neutral" = "neutral";
-      const combinedText = `${item.title} ${item.description}`.toLowerCase();
-
-      const positiveMatches = positiveKeywords.filter((word) =>
-        combinedText.includes(word)
-      ).length;
-      const negativeMatches = negativeKeywords.filter((word) =>
-        combinedText.includes(word)
-      ).length;
-
-      if (positiveMatches > negativeMatches) {
-        sentiment = "positive";
-        positiveCount++;
-      } else if (negativeMatches > positiveMatches) {
-        sentiment = "negative";
-        negativeCount++;
-      }
-
-      newsItems.push({
-        title: item.title,
-        description: item.description,
-        url: item.url,
-        publishTime: item.publishTime,
-        sentiment,
-      });
-    }
-
-    // Determine overall sentiment
-    let overallSentiment: "positive" | "negative" | "neutral" = "neutral";
-    if (positiveCount > negativeCount) overallSentiment = "positive";
-    else if (negativeCount > positiveCount) overallSentiment = "negative";
-
-    // Generate summary points
-    const summary = [];
-    if (newsItems.length > 0) {
-      summary.push(`Found ${newsItems.length} recent news items`);
-      summary.push(`Overall market sentiment: ${overallSentiment}`);
-      if (positiveCount > 0)
-        summary.push(`${positiveCount} positive developments reported`);
-      if (negativeCount > 0)
-        summary.push(`${negativeCount} concerning developments noted`);
-    } else {
-      summary.push("No recent news found");
-    }
-
-    return {
-      symbol,
-      news: newsItems,
-      overallSentiment,
-      summary,
-    };
-  } catch (error) {
-    console.error(`Error fetching news for ${symbol}:`, error);
-    return {
-      symbol,
-      news: [],
-      overallSentiment: "neutral",
-      summary: ["Unable to fetch market news"],
-    };
-  }
-}
-
-async function generateReport(stockCodes: string[]): Promise<MarketNews> {
-  try {
-    const report: MarketNews = {
-      symbol: "",
-      news: [],
-      overallSentiment: "neutral",
-      summary: [],
-    };
-    for (let i = 0; i < stockCodes.length; i++) {
-      const stockDetails = await fetchMarketNews(stockCodes[i]);
-      report.symbol = stockDetails.symbol;
-      report.news = stockDetails.news;
-      report.overallSentiment = stockDetails.overallSentiment;
-      report.summary = stockDetails.summary;
-    }
-    return report;
-  } catch (error) {
-    console.error(error);
-    return {
-      symbol: "",
-      news: [],
-      overallSentiment: "neutral",
-      summary: ["Unable to generate report"],
-    };
-  }
-}
-
-// Create a topic for each client interaction
-async function createTopic(
-  topicName: string,
-  topicMemo: string,
-  privateKey: PrivateKey
-) {
-  try {
-    console.log("Setting up a custom fee configuration ...");
-    const customFee = new CustomFixedFee()
-      .setDenominatingTokenId(MOCK_USDC!)
-      .setAmount(Number(CUSTOM_FEE))
-      .setFeeCollectorAccountId(ACCOUNT_ID!);
-    console.log(
-      `Custom fee configured: ${CUSTOM_FEE} ${MOCK_USDC} tokens per message`
-    );
-
-    console.log("Creating new topic with custom fee...");
-    const topicCreateTx = new TopicCreateTransaction()
-      .setTopicMemo(`${topicName}: ${topicMemo}`)
-      .setSubmitKey(privateKey)
-      .setCustomFees([customFee]);
-
-    const executeTopicCreateTx = await topicCreateTx.execute(client);
-    const topicCreateReceipt = await executeTopicCreateTx.getReceipt(client);
-    const topicId = topicCreateReceipt.topicId;
-    console.log(`Topic created successfully with ID: ${topicId}`);
-  } catch (error) {
-    console.error("Error creating topic:", error);
-  }
-}
-
-async function getAuthToken(
-  email: string,
-  password: string
-): Promise<string | null> {
-  try {
-    const loginResponse = await fetch(`http://localhost:5004/api/auth/login`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ email, password }),
-    }).catch((error) => {
-      console.error("Network error during login:", error);
-      throw new Error("Failed to connect to authentication service");
-    });
-
-    if (!loginResponse.ok) {
-      console.error("Login failed with status:", loginResponse.status);
-      return null;
-    }
-
-    const loginData = await loginResponse.json().catch((error) => {
-      console.error("Error parsing login response:", error);
-      return { token: null };
-    });
-
-    if (!loginData.token) {
-      console.error("No token received in login response");
-      return null;
-    }
-    return loginData.token;
-  } catch (error) {
-    console.error(error);
-    return null;
-  }
-}
-
-async function mintTokens(
-  tokenCode: string,
-  amount: number,
-  authToken: string
-) {
-  try {
-    const url = `${API_BASE_URL}/tokens/${tokenCode.toUpperCase()}/mint`;
-    console.log("Attempting to mint tokens with:", {
-      url,
-      tokenCode,
-      amount,
-      hasAuthToken: !!authToken,
-    });
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${authToken}`,
-      },
-      body: JSON.stringify({ amount }),
-    });
-
-    console.log("Response status:", response.status);
-    console.log("Response status text:", response.statusText);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Failed to mint tokens. Response:", errorText);
-      return null;
-    }
-
-    const data = await response.json();
-    console.log("Mint successful. Response:", data);
-    return data;
-  } catch (error) {
-    console.error("Error in mintTokens:", error);
-    return null;
-  }
-}
-
-async function redeemTokens(
-  tokenCode: string,
-  amount: number,
-  authToken: string,
-  privateKey: PrivateKey,
-  accountId: string,
-  tokenId: string
-) {
-  try {
-    console.log("Creating transfer transaction...");
-    console.log(`From: ${accountId}`);
-    console.log(`To: ${ACCOUNT_ID}`);
-    console.log(`Amount: ${amount}`);
-    console.log(`Token ID: ${tokenId} - ${tokenCode}`);
-
-    const hederaPrivateKey = privateKey;
-
-    const MY_ACCOUNT_ID = AccountId.fromString("0.0.5171455");
-    const MY_PRIVATE_KEY = PrivateKey.fromStringED25519(
-      "4666f5b5e528d5c549ea78d540b31ee18802145e242f31e3af079e0975da2294"
-    );
-
-    client = Client.forTestnet();
-    client.setOperator(MY_ACCOUNT_ID, MY_PRIVATE_KEY);
-
-    console.log(`Client set to: ${client}`);
-
-    const transaction = new TransferTransaction()
-      .addTokenTransfer(tokenId, AccountId.fromString(accountId), -amount)
-      .addTokenTransfer(tokenId, AccountId.fromString(ACCOUNT_ID!), amount);
-
-    // Set max transaction fee
-    transaction.setMaxTransactionFee(new Hbar(10));
-
-    console.log("Freezing transaction with client...");
-    const frozenTx = transaction.freezeWith(client);
-    console.log("Transaction frozen successfully");
-
-    console.log("Transaction created, signing...");
-    const signedTx = await frozenTx.sign(hederaPrivateKey);
-    console.log("Transaction signed, executing...");
-    const txResponse = await signedTx.execute(client);
-    console.log("Transaction executed, getting receipt...");
-    const receipt = await txResponse.getReceipt(client);
-
-    if (receipt.status.toString() !== "SUCCESS") {
-      console.error(
-        "Transaction failed with status:",
-        receipt.status.toString()
-      );
-      throw new Error(`Token transfer failed: ${receipt.status.toString()}`);
-    }
-
-    console.log("Transaction successful, sending to backend...");
-    console.log("Transaction ID:", txResponse.transactionId.toString());
-
-    // Send the burn request with transaction ID to the backend
-    const burnResponse = await fetch(
-      `${API_BASE_URL}/tokens/${tokenCode}/burn`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          amount,
-          transactionId: txResponse.transactionId.toString(),
-        }),
-      }
-    );
-
-    if (!burnResponse.ok) {
-      const errorData = await burnResponse.json();
-      console.error("Backend burn request failed:", errorData);
-      throw new Error(errorData.message || "Failed to burn tokens");
-    }
-
-    const result = await burnResponse.json();
-    console.log("Backend response:", result);
-    if (!result) {
-      throw new Error("No response from backend");
-    }
-    return result;
-  } catch (error) {
-    console.error(error);
-    return null;
-  }
-}
-
-async function swapForUSDC(
-  tokenCode: string,
-  amount: number,
-  authToken: string,
-  accountId: string,
-  privateKey: string
-) {
-  try {
-    const response = await fetch(`${API_BASE_URL}/tokens/${tokenCode}/sell`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${authToken}`,
-      },
-      body: JSON.stringify({
-        amount,
-        accountId,
-        privateKey,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.message || "Failed to swap tokens");
-    }
-
-    const responseData = await response.json();
-    return responseData;
-  } catch (error) {
-    console.error(error);
-    return null;
-  }
-}
-
 async function main() {
   try {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-
-    console.error("Neo MCP Server running on stdio");
   } catch (error) {
-    console.error("Fatal error in main():", error);
     process.exit(1);
   }
 }
 
-main().catch((error) => {
-  console.error("Fatal error in main():", error);
+main().catch(() => {
   process.exit(1);
 });
