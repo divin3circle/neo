@@ -119,6 +119,38 @@ interface TimeSeriesData {
   last90Days: TimeSeriesStats;
 }
 
+interface User {
+  _id: string;
+  name: string;
+  email: string;
+}
+
+interface Message {
+  _id: string;
+  content: string;
+  sender: User;
+  createdAt: string; // ISO 8601 format
+  updatedAt: string; // ISO 8601 format
+}
+
+interface Topic {
+  _id: string;
+  userId: User;
+  name: string;
+  description: string;
+  topicId: string;
+  hederaTopicID: string;
+  messages: Message[];
+  topicMemo: string;
+  createdAt: string; // ISO 8601 format
+  updatedAt: string; // ISO 8601 format
+  __v: number;
+}
+
+interface TopicsResponse {
+  topics: Topic[];
+}
+
 /** HELPER FUNCTIONS */
 /**
  * Authenticates a user and retrieves an auth token.
@@ -141,7 +173,7 @@ export async function getAuthToken(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password }, null, 2),
     }).catch(() => {
       throw new Error("Failed to connect to authentication service");
     });
@@ -186,7 +218,7 @@ export async function fetchStockBalances(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password }, null, 2),
     }).catch(() => {
       throw new Error("Failed to connect to authentication service");
     });
@@ -258,25 +290,21 @@ export async function fetchTokenBalances(
       "Content-Type": "application/json",
     },
   }).catch((error) => {
-    console.error("Network error fetching user profile:", error);
-    return null;
+    throw new Error("Failed to connect to authentication service: " + error);
   });
 
   if (!authResponse?.ok) {
-    console.error("Auth request failed with status:", authResponse?.status);
-    return [];
+    throw new Error("Auth request failed with status: " + authResponse?.status);
   }
 
   const authData = await authResponse.json().catch((error) => {
-    console.error("Error parsing auth response:", error);
-    return { user: { tokens: [] } };
+    throw new Error("Error parsing auth response: " + error);
   });
 
   const tokens = authData?.user?.tokens || [];
 
   if (!Array.isArray(tokens)) {
-    console.error("Invalid stock holdings format:", tokens);
-    return [];
+    throw new Error("Invalid stock holdings format: " + tokens);
   }
 
   return tokens.map((holding: any) => ({
@@ -362,19 +390,51 @@ export async function getAssetValue(assets: UserAsset[]): Promise<Asset[]> {
   return assetsAndPrices;
 }
 
+/**
+ * Fetches the current KES/USD exchange rate from XE API.
+ * @returns Promise<number> Returns the current exchange rate. If the API call fails, returns a default rate of 129.65
+ * @throws Error - If the API request fails or response cannot be parsed
+ * @side-effects Makes an HTTP request to external XE API
+ * @performance O(1) - Single API call
+ * @description
+ * - Fetches real-time exchange rate from XE API
+ * - Uses last 24 hours average rate
+ * - Falls back to default rate of 129.65 if API call fails
+ * @example
+ * const rate = await getExchangeRate();
+ * console.log(rate); // 129.65
+ */
 export async function getExchangeRate(): Promise<number> {
   try {
     const response = await fetch(EXCHANGE_RATE_URL);
     if (!response.ok) {
-      return 129.65;
+      return 129.65; // Default fallback rate
     }
     const data: TimeSeriesData = await response.json();
     return data.last1Days.average;
   } catch (error) {
-    return 129.69;
+    return 129.65; // Default fallback rate on error
   }
 }
 
+/**
+ * Fetches current prices for native tokens (HBAR, USDC) from Binance API and calculates their value in KES.
+ * @param assets - Array of token assets containing symbol and balance
+ * @returns Promise<Array<{symbol: string, value: number}>> Array of assets with their KES values
+ * @throws Error - If Binance API request fails or returns invalid data
+ * @side-effects
+ * - Makes HTTP requests to Binance API for each token
+ * - Makes HTTP request to get exchange rate
+ * @performance
+ * - O(n) where n is number of assets
+ * - Makes n+1 API calls (n tokens + 1 exchange rate)
+ * @example
+ * const nativeTokens = [
+ *   { symbol: "HBAR", balance: 100 },
+ *   { symbol: "USDC", balance: 50 }
+ * ];
+ * const values = await getNativeTokenPrice(nativeTokens);
+ */
 export async function getNativeTokenPrice(
   assets: UserAsset[]
 ): Promise<Asset[]> {
@@ -578,7 +638,7 @@ export async function mintTokens(
         "Content-Type": "application/json",
         Authorization: `Bearer ${authToken}`,
       },
-      body: JSON.stringify({ amount }),
+      body: JSON.stringify({ amount }, null, 2),
     });
 
     if (!response.ok) {
@@ -638,10 +698,14 @@ export async function redeemTokens(
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
         },
-        body: JSON.stringify({
-          amount,
-          transactionId: txResponse.transactionId.toString(),
-        }),
+        body: JSON.stringify(
+          {
+            amount,
+            transactionId: txResponse.transactionId.toString(),
+          },
+          null,
+          2
+        ),
       }
     );
 
@@ -688,11 +752,15 @@ export async function swapForUSDC(
         "Content-Type": "application/json",
         Authorization: `Bearer ${authToken}`,
       },
-      body: JSON.stringify({
-        amount,
-        accountId,
-        privateKey,
-      }),
+      body: JSON.stringify(
+        {
+          amount,
+          accountId,
+          privateKey,
+        },
+        null,
+        2
+      ),
     });
 
     if (!response.ok) {
@@ -793,6 +861,8 @@ export async function submitMessage(
  * @param accountId - Account ID for transaction signing
  * @param privateKey - Private key for transaction signing
  * @param userId - User ID for topic naming
+ * @param userEmail - User email for authentication
+ * @param password - User password for authentication
  * @returns Promise<HcsManagerResponse> - Response with transaction details
  * @throws Error - If transaction fails
  * @side-effects - Creates blockchain transaction(s)
@@ -805,7 +875,9 @@ export async function hcsManager(
   message: string,
   accountId: string,
   privateKey: string,
-  userId: string
+  userId: string,
+  userEmail: string,
+  password: string
 ): Promise<HcsManagerResponse> {
   try {
     let topicID;
@@ -824,6 +896,19 @@ export async function hcsManager(
           ],
         };
       }
+      const authToken = await getAuthToken(userEmail, password);
+      if (!authToken) {
+        return {
+          content: [{ type: "text", text: "Auth token absent!!" }],
+        };
+      }
+      const createMessageResponse = await createTopicOnBackend(
+        `${userId}-${accountId}`,
+        `${accountId} conversation with Neo`,
+        `${accountId} conversation with Neo`,
+        topicID,
+        authToken
+      );
       const messageReceipt = await submitMessage(
         topicID,
         message,
@@ -840,6 +925,13 @@ export async function hcsManager(
           ],
         };
       }
+
+      const addMessageResponse = await addMessageToTopic(
+        topicID,
+        message,
+        authToken
+      );
+
       return {
         content: [
           {
@@ -848,7 +940,11 @@ export async function hcsManager(
           },
           {
             type: "text",
-            text: JSON.stringify(messageReceipt),
+            text: JSON.stringify(messageReceipt, null, 2),
+          },
+          {
+            type: "text",
+            text: `${messageReceipt.scheduledTransactionId?.toString()}`,
           },
         ],
       };
@@ -872,10 +968,14 @@ export async function hcsManager(
 
     return {
       content: [
-        { type: "text", text: JSON.stringify(messageReceipt) },
+        { type: "text", text: JSON.stringify(messageReceipt, null, 2) },
         {
           type: "text",
           text: `Message submitted successfully to topic ${topicId}`,
+        },
+        {
+          type: "text",
+          text: `${messageReceipt.scheduledTransactionId?.toString()}`,
         },
       ],
     };
@@ -908,6 +1008,177 @@ export async function initializeHederaAgent(): Promise<HederaAgentKit> {
       PUBLIC_KEY.toString(),
       NETWORK! as HederaNetworkType
     );
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Calls the deduct endpoint to deduct message submission fees from our backend
+ * @param transactionId - The transaction ID of the message submission
+ * @returns Promise<DeductResponse> - Response with transaction details
+ * @throws Error - If API request fails or transaction fails
+ * @side-effects - Makes HTTP request and creates blockchain transaction
+ * @performance - O(1) time complexity, single HTTP request
+ * @example
+ * const response = await deductFees("0.0.123", "Hello", "0.0.456", "private-key", "user123");
+ */
+export async function deductFees(transactionId: string, authToken: string) {
+  try {
+    const url = `${API_BASE_URL}/tokens/deduct-usdc/${transactionId}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ transactionId }, null, 2),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || "Failed to deduct fees");
+    }
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Create a topic that has been created on Hedera Network on our backend
+ * @param topicName - the name of the topic created on Hedera Network
+ * @param description - the description of the topic created on Hedera Network
+ * @param topicMemo - the memo of the topic created on Hedera Network
+ * @param hederaTopicId - the Hedera Topic ID of the topic created on Hedera Network
+ * @param authToken - the authentication token of the user
+ * @returns Promise<CreateTopicResponse> - Response with transaction details
+ * @throws Error - If API request fails or transaction fails
+ * @performance - O(1) time complexity, single transaction
+ * @example
+ * const response = await createTopic("user123", "Conversation with Neo", "private-key", 1);
+ */
+export async function createTopicOnBackend(
+  topicName: string,
+  description: string,
+  topicMemo: string,
+  hederaTopicId: string,
+  authToken: string
+) {
+  try {
+    const url = `${API_BASE_URL}/topics/`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(
+        { topicName, description, topicMemo, hederaTopicId },
+        null,
+        2
+      ),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || "Failed to create topic on backend");
+    }
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Add a new message to a topic that has been created on our backend
+ * @param hederaTopicId - the Hedera Topic ID of the topic created on Hedera Network
+ * @param message - the message to be added to the topic
+ * @param authToken - the authentication token of the user
+ * @returns Promise<AddMessageResponse> - Response with transaction details
+ * @throws Error - If API request fails or transaction fails
+ * @performance - O(1) time complexity, single transaction
+ * @example
+ * const response = await addMessage("0.0.123", "Hello", "0.0.456", "private-key", "user123");
+ */
+export async function addMessageToTopic(
+  hederaTopicId: string,
+  message: string,
+  authToken: string
+) {
+  try {
+    const url = `${API_BASE_URL}/topics/${hederaTopicId}/messages`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ message }, null, 2),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || "Failed to add message to topic");
+    }
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Get the hedera topics from user id
+ * @param userId - the user id of the user
+ * @param authToken - the authentication token of the user
+ * @returns Promise<TopicsResponse> - Response with transaction details
+ * @throws Error - If API request fails or transaction fails
+ * @performance - O(1) time complexity, single transaction
+ */
+export async function getHederaTopicsFromBackend(
+  userId: string,
+  authToken: string
+): Promise<TopicsResponse> {
+  try {
+    const url = `${API_BASE_URL}/topics/user/${userId}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || "Failed to get hedera topics");
+    }
+    const result = await response.json();
+    return result as TopicsResponse;
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Get the main topic for a user
+ * @param userId - the user id of the user
+ * @param authToken - the authentication token of the user
+ * @returns Promise<string | null> - The main topic id or null if no topics exist
+ * @throws Error - If API request fails or transaction fails
+ * @performance - O(1) time complexity, single transaction
+ * @example
+ * const mainTopic = await getUserMainTopic("user123", "private-key");
+ */
+export async function getUserMainTopicId(
+  userId: string,
+  authToken: string
+): Promise<string | undefined> {
+  try {
+    const topics = await getHederaTopicsFromBackend(userId, authToken);
+    if (topics.topics.length === 0) {
+      return undefined;
+    }
+    return topics.topics[0].hederaTopicID;
   } catch (error) {
     throw error;
   }

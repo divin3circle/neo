@@ -17,6 +17,8 @@ import {
   MarketNews,
   hcsManager,
   getNativeTokenPrice,
+  deductFees,
+  getUserMainTopicId,
 } from "./helpers.js";
 
 dotenv.config();
@@ -70,7 +72,6 @@ const server = new McpServer({
  * @param privateKey - DER encoded ECDSA private key of the user
  * @param userEmail - User's email address
  * @param password - Account password for the user
- * @param topicId - The topic id to submit the message to. If not provided, a new topic will be created.
  * @returns Promise<{content: Array<{type: string, text: string}>}> - Portfolio balances and transaction details
  * @throws Error - If authentication fails or data fetching fails
  * @side-effects - Makes HTTP requests to fetch balances and creates HCS message
@@ -82,7 +83,6 @@ const server = new McpServer({
  *   privateKey: "private-key",
  *   userEmail: "user@example.com",
  *   password: "password123",
- *   topicId: "0.0.456"
  * });
  */
 server.tool(
@@ -96,17 +96,8 @@ server.tool(
       .describe("DER encoded ECDSA private key of the user"),
     userEmail: z.string().describe("User's email address"),
     password: z.string().describe("Account password for the user"),
-    topicId: z
-      .string()
-      .optional()
-      .describe(
-        "The topic id to submit the message to. If not provided or not in memory, a new topic will be created."
-      ),
   },
-  async (
-    { userId, accountId, privateKey, userEmail, password, topicId },
-    extra
-  ) => {
+  async ({ userId, accountId, privateKey, userEmail, password }, extra) => {
     try {
       const publicKey = PrivateKey.fromStringECDSA(privateKey).publicKey;
       const hederaAgent = new HederaAgentKit(
@@ -184,13 +175,45 @@ server.tool(
         usdcBalance - 1
       } USDC`;
 
+      const authToken = await getAuthToken(userEmail, password);
+
+      if (!authToken) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Auth token absent! Authentication failed",
+            },
+          ],
+        };
+      }
+
+      const topicId = await getUserMainTopicId(userId, authToken);
+
       const hcsManagerResponse = await hcsManager(
         topicId,
         balanceMessage,
         accountId,
         privateKey,
-        userId
+        userId,
+        userEmail,
+        password
       );
+
+      const txId =
+        accountId +
+        "@" +
+        Math.round(Date.now() / 1000).toString() +
+        "." +
+        Math.round(Date.now()).toString();
+
+      let message;
+
+      if (!authToken) {
+        message = "Auth token absent!!";
+      } else {
+        message = await deductFees(txId, authToken);
+      }
 
       return {
         content: [
@@ -200,22 +223,26 @@ server.tool(
           },
           {
             type: "text",
-            text: JSON.stringify({
-              summary: {
-                totalTokens: tokenBalances.length,
-                totalStocks: stockBalances.length,
-                lastUpdated: portfolioData.lastUpdated,
+            text: JSON.stringify(
+              {
+                summary: {
+                  totalTokens: tokenBalances.length,
+                  totalStocks: stockBalances.length,
+                  lastUpdated: portfolioData.lastUpdated,
+                },
+                details: portfolioData,
               },
-              details: portfolioData,
-            }),
+              null,
+              2
+            ),
           },
           {
             type: "text",
-            text: JSON.stringify(hcsManagerResponse),
+            text: JSON.stringify(hcsManagerResponse, null, 2),
           },
           {
             type: "text",
-            text: `Remaining balance: ${usdcBalance - 1} USDC`,
+            text: JSON.stringify(message, null, 2),
           },
         ],
       };
@@ -245,7 +272,6 @@ server.tool(
  * @param password - Account password for the user
  * @param accountId - Hedera account ID of the user
  * @param privateKey - DER encoded ECDSA private key of the user
- * @param topicId - The topic id to submit the message to. If not provided, a new topic will be created.
  * @returns Promise<{content: Array<{type: string, text: string}>}> - Portfolio value and transaction details
  * @throws Error - If authentication fails or price fetching fails
  * @side-effects - Makes HTTP requests to fetch prices and creates HCS message
@@ -257,7 +283,6 @@ server.tool(
  *   password: "password123",
  *   accountId: "0.0.123",
  *   privateKey: "private-key",
- *   topicId: "0.0.456"
  * });
  */
 server.tool(
@@ -271,17 +296,8 @@ server.tool(
     privateKey: z
       .string()
       .describe("DER encoded ECDSA private key of the user"),
-    topicId: z
-      .string()
-      .optional()
-      .describe(
-        "The topic id to submit the message to. If not provided or not in memory, a new topic will be created."
-      ),
   },
-  async (
-    { userId, userEmail, password, accountId, privateKey, topicId },
-    extra
-  ) => {
+  async ({ userId, userEmail, password, accountId, privateKey }, extra) => {
     try {
       const tokenBalances = await fetchTokenBalances(
         userId,
@@ -319,9 +335,6 @@ server.tool(
       const nativeTokens = tokenBalances.filter(
         (token) => token.symbol === "HBAR" || token.symbol === "USDC"
       );
-      const stockTokens = tokenBalances.filter(
-        (token) => token.symbol !== "HBAR" && token.symbol !== "USDC"
-      );
 
       const assetValues = await getAssetValue([
         ...stockBalances.map(
@@ -330,15 +343,12 @@ server.tool(
             balance: stock.quantity,
           })
         ),
-        ...stockTokens.map((token: { symbol: string; balance: number }) => ({
-          symbol: token.symbol,
-          balance: token.balance,
-        })),
       ]);
 
       const nativeTokenValues = await getNativeTokenPrice(nativeTokens);
 
       const fullAssetValues = assetValues.concat(nativeTokenValues);
+
       if (!fullAssetValues || fullAssetValues.length === 0) {
         return {
           content: [
@@ -366,19 +376,52 @@ server.tool(
       }
 
       const valueMessage = `Aggregated portfolio value for ${userId} on ${new Date().toISOString()} is ${totalValue} KES`;
+
+      const authToken = await getAuthToken(userEmail, password);
+
+      if (!authToken) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Auth token absent! Authentication failed",
+            },
+          ],
+        };
+      }
+
+      const topicId = await getUserMainTopicId(userId, authToken);
+
       const hcsManagerResponse = await hcsManager(
         topicId,
         valueMessage,
         accountId,
         privateKey,
-        userId
+        userId,
+        userEmail,
+        password
       );
+
+      const txId =
+        accountId +
+        "@" +
+        Math.round(Date.now() / 1000).toString() +
+        "." +
+        Math.round(Date.now()).toString();
+
+      let message;
+
+      if (!authToken) {
+        message = "Auth token absent!!";
+      } else {
+        message = await deductFees(txId, authToken);
+      }
 
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(fullAssetValues),
+            text: JSON.stringify(fullAssetValues, null, 2),
           },
           {
             type: "text",
@@ -386,7 +429,11 @@ server.tool(
           },
           {
             type: "text",
-            text: JSON.stringify(hcsManagerResponse),
+            text: JSON.stringify(hcsManagerResponse, null, 2),
+          },
+          {
+            type: "text",
+            text: JSON.stringify(message, null, 2),
           },
         ],
       };
@@ -414,7 +461,6 @@ server.tool(
  * @param stockCodes - Array of stock codes owned by the user
  * @param accountId - Hedera account ID of the user
  * @param privateKey - DER encoded ECDSA private key of the user
- * @param topicId - The topic id to submit the message to. If not provided, a new topic will be created.
  * @param userId - Unique identifier for the portfolio
  * @returns Promise<{content: Array<{type: string, text: string}>}> - Market trends analysis and transaction details
  * @throws Error - If news fetching fails
@@ -425,7 +471,6 @@ server.tool(
  *   stockCodes: ["KCB", "SCOM"],
  *   accountId: "0.0.123",
  *   privateKey: "private-key",
- *   topicId: "0.0.456",
  *   userId: "user123"
  * });
  */
@@ -438,15 +483,14 @@ server.tool(
     privateKey: z
       .string()
       .describe("DER encoded ECDSA private key of the user"),
-    topicId: z
-      .string()
-      .optional()
-      .describe(
-        "The topic id to submit the message to. If not provided or not in memory, a new topic will be created."
-      ),
     userId: z.string().describe("Unique identifier for the portfolio"),
+    userEmail: z.string().describe("User's email address"),
+    password: z.string().describe("Account password for the user"),
   },
-  async ({ stockCodes, accountId, privateKey, topicId, userId }, extra) => {
+  async (
+    { stockCodes, accountId, privateKey, userId, userEmail, password },
+    extra
+  ) => {
     let stockDetailsMap: Record<string, MarketNews> = {};
     try {
       for (let i = 0; i < stockCodes.length; i++) {
@@ -468,13 +512,39 @@ server.tool(
 
     const comparisonMessage = `Comparison of the user portfolio with the trends of the stocks & tokens he owns for ${userId} on ${new Date().toISOString()}`;
 
+    const authToken = await getAuthToken(userEmail, password);
+
+    if (!authToken) {
+      return {
+        content: [{ type: "text", text: "Auth token absent!!" }],
+      };
+    }
+
+    const topicId = await getUserMainTopicId(userId, authToken);
     const hcsManagerResponse = await hcsManager(
       topicId,
       comparisonMessage,
       accountId,
       privateKey,
-      userId
+      userId,
+      userEmail,
+      password
     );
+
+    const txId =
+      accountId +
+      "@" +
+      Math.round(Date.now() / 1000).toString() +
+      "." +
+      Math.round(Date.now()).toString();
+
+    let message;
+
+    if (!authToken) {
+      message = "Auth token absent!!";
+    } else {
+      message = await deductFees(txId, authToken);
+    }
     return {
       content: [
         {
@@ -483,11 +553,15 @@ server.tool(
         },
         {
           type: "text",
-          text: JSON.stringify(stockDetailsMap),
+          text: JSON.stringify(stockDetailsMap, null, 2),
         },
         {
           type: "text",
-          text: JSON.stringify(hcsManagerResponse),
+          text: JSON.stringify(hcsManagerResponse, null, 2),
+        },
+        {
+          type: "text",
+          text: JSON.stringify(message, null, 2),
         },
       ],
     };
@@ -499,7 +573,6 @@ server.tool(
  * @param stockCodes - Array of stock codes owned by the user
  * @param accountId - Hedera account ID of the user
  * @param privateKey - DER encoded ECDSA private key of the user
- * @param topicId - The topic id to submit the message to. If not provided, a new topic will be created.
  * @param userId - Unique identifier for the portfolio
  * @returns Promise<{content: Array<{type: string, text: string}>}> - Report with recommendations and transaction details
  * @throws Error - If report generation fails
@@ -510,7 +583,6 @@ server.tool(
  *   stockCodes: ["KCB", "SCOM"],
  *   accountId: "0.0.123",
  *   privateKey: "private-key",
- *   topicId: "0.0.456",
  *   userId: "user123"
  * });
  */
@@ -523,29 +595,56 @@ server.tool(
     privateKey: z
       .string()
       .describe("DER encoded ECDSA private key of the user"),
-    topicId: z
-      .string()
-      .optional()
-      .describe(
-        "The topic id to submit the message to. If not provided or not in memory, a new topic will be created."
-      ),
     userId: z.string().describe("Unique identifier for the portfolio"),
+    userEmail: z.string().describe("User's email address"),
+    password: z.string().describe("Account password for the user"),
   },
-  async ({ stockCodes, accountId, privateKey, topicId, userId }, extra) => {
+  async (
+    { stockCodes, accountId, privateKey, userId, userEmail, password },
+    extra
+  ) => {
     try {
       const news = await generateReport(stockCodes);
       const reportMessage = `Report and recommended actions for ${userId} on ${new Date().toISOString()}`;
+
+      const authToken = await getAuthToken(userEmail, password);
+
+      if (!authToken) {
+        return {
+          content: [{ type: "text", text: "Auth token absent!!" }],
+        };
+      }
+
+      const topicId = await getUserMainTopicId(userId, authToken);
       const hcsManagerResponse = await hcsManager(
         topicId,
         reportMessage,
         accountId,
         privateKey,
-        userId
+        userId,
+        userEmail,
+        password
       );
+
+      const txId =
+        accountId +
+        "@" +
+        Math.round(Date.now() / 1000).toString() +
+        "." +
+        Math.round(Date.now()).toString();
+
+      let message;
+
+      if (!authToken) {
+        message = "Auth token absent!!";
+      } else {
+        message = await deductFees(txId, authToken);
+      }
       return {
         content: [
-          { type: "text", text: JSON.stringify(news) },
-          { type: "text", text: JSON.stringify(hcsManagerResponse) },
+          { type: "text", text: JSON.stringify(news, null, 2) },
+          { type: "text", text: JSON.stringify(hcsManagerResponse, null, 2) },
+          { type: "text", text: JSON.stringify(message, null, 2) },
         ],
       };
     } catch (error) {
@@ -570,7 +669,6 @@ server.tool(
  * @param password - User's password for authentication
  * @param privateKey - DER encoded ECDSA private key for transaction signing
  * @param accountId - Hedera account ID for transaction signing
- * @param topicId - The topic id to submit the message to. If not provided, a new topic will be created.
  * @param userId - Unique identifier for the portfolio
  * @returns Promise<{content: Array<{type: string, text: string}>}> - Transaction results and details
  * @throws Error - If authentication fails or transaction execution fails
@@ -590,7 +688,6 @@ server.tool(
  *   password: "password123",
  *   privateKey: "private-key",
  *   accountId: "0.0.123",
- *   topicId: "0.0.456",
  *   userId: "user123"
  * });
  */
@@ -630,16 +727,10 @@ server.tool(
       .describe(
         "The Hedera account ID of the user to sign trade transactions."
       ),
-    topicId: z
-      .string()
-      .optional()
-      .describe(
-        "The topic id to submit the message to. If not provided or not in memory, a new topic will be created."
-      ),
     userId: z.string().describe("Unique identifier for the portfolio"),
   },
   async (
-    { actions, email, password, privateKey, accountId, topicId, userId },
+    { actions, email, password, privateKey, accountId, userId },
     extra
   ) => {
     let responseContent;
@@ -682,31 +773,57 @@ server.tool(
           const mintMessage = `Minted ${action.amount} ${
             action.token
           } tokens for ${userId} on ${new Date().toISOString()}`;
+          const topicId = await getUserMainTopicId(userId, authToken);
           const hcsManagerResponse = await hcsManager(
             topicId,
             mintMessage,
             accountId,
             privateKey,
-            userId
+            userId,
+            email,
+            password
           );
+
+          const txId =
+            accountId +
+            "@" +
+            Math.round(Date.now() / 1000).toString() +
+            "." +
+            Math.round(Date.now()).toString();
+
+          let message;
+
+          if (!authToken) {
+            message = "Auth token absent!!";
+          } else {
+            message = await deductFees(txId, authToken);
+          }
           return {
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  message: mintResponse.message,
-                  transaction: {
-                    tokenId: mintResponse.transaction.tokenId,
-                    amount: mintResponse.transaction.amount,
-                    status: mintResponse.transaction.status,
-                    hederaTransactionId:
-                      mintResponse.transaction.hederaTransactionId,
+                text: JSON.stringify(
+                  {
+                    message: mintResponse.message,
+                    transaction: {
+                      tokenId: mintResponse.transaction.tokenId,
+                      amount: mintResponse.transaction.amount,
+                      status: mintResponse.transaction.status,
+                      hederaTransactionId:
+                        mintResponse.transaction.hederaTransactionId,
+                    },
                   },
-                }),
+                  null,
+                  2
+                ),
               },
               {
                 type: "text",
-                text: JSON.stringify(hcsManagerResponse),
+                text: JSON.stringify(hcsManagerResponse, null, 2),
+              },
+              {
+                type: "text",
+                text: JSON.stringify(message, null, 2),
               },
             ],
           };
@@ -733,22 +850,43 @@ server.tool(
           const redeemMessage = `Redeemed ${action.amount} ${
             action.token
           } tokens for ${userId} on ${new Date().toISOString()}`;
+          const topicId = await getUserMainTopicId(userId, authToken);
           const hcsManagerResponse = await hcsManager(
             topicId,
             redeemMessage,
             accountId,
             privateKey,
-            userId
+            userId,
+            email,
+            password
           );
+          const txId =
+            accountId +
+            "@" +
+            Math.round(Date.now() / 1000).toString() +
+            "." +
+            Math.round(Date.now()).toString();
+
+          let message;
+
+          if (!authToken) {
+            message = "Auth token absent!!";
+          } else {
+            message = await deductFees(txId, authToken);
+          }
           return {
             content: [
               {
                 type: "text",
-                text: JSON.stringify(redeemResponse),
+                text: JSON.stringify(redeemResponse, null, 2),
               },
               {
                 type: "text",
-                text: JSON.stringify(hcsManagerResponse),
+                text: JSON.stringify(hcsManagerResponse, null, 2),
+              },
+              {
+                type: "text",
+                text: JSON.stringify(message, null, 2),
               },
             ],
           };
@@ -774,54 +912,116 @@ server.tool(
           const swapMessage = `Swapped ${action.amount} ${
             action.token
           } for USDC for ${userId} on ${new Date().toISOString()}`;
+          const topicId = await getUserMainTopicId(userId, authToken);
           const hcsManagerResponse = await hcsManager(
             topicId,
             swapMessage,
             accountId,
             privateKey,
-            userId
+            userId,
+            email,
+            password
           );
+          const txId =
+            accountId +
+            "@" +
+            Math.round(Date.now() / 1000).toString() +
+            "." +
+            Math.round(Date.now()).toString();
+
+          let message;
+
+          if (!authToken) {
+            message = "Auth token absent!!";
+          } else {
+            message = await deductFees(txId, authToken);
+          }
           return {
             content: [
               {
                 type: "text",
-                text: JSON.stringify(swapResponse),
+                text: JSON.stringify(swapResponse, null, 2),
               },
               {
                 type: "text",
-                text: JSON.stringify(hcsManagerResponse),
+                text: JSON.stringify(hcsManagerResponse, null, 2),
+              },
+              {
+                type: "text",
+                text: JSON.stringify(message, null, 2),
               },
             ],
           };
         } else {
           const noActionMessage = `No action to execute for ${userId} on ${new Date().toISOString()}`;
+          const topicId = await getUserMainTopicId(userId, authToken);
           const hcsManagerResponse = await hcsManager(
             topicId,
             noActionMessage,
             accountId,
             privateKey,
-            userId
+            userId,
+            email,
+            password
           );
+          const txId =
+            accountId +
+            "@" +
+            Math.round(Date.now() / 1000).toString() +
+            "." +
+            Math.round(Date.now()).toString();
+
+          let message;
+
+          if (!authToken) {
+            message = "Auth token absent!!";
+          } else {
+            message = await deductFees(txId, authToken);
+          }
           return {
             content: [
               { type: "text", text: "No action to execute" },
-              { type: "text", text: JSON.stringify(hcsManagerResponse) },
+              {
+                type: "text",
+                text: JSON.stringify(hcsManagerResponse, null, 2),
+              },
+              {
+                type: "text",
+                text: JSON.stringify(message, null, 2),
+              },
             ],
           };
         }
       }
       const noActionMessage = `No action to execute for ${userId} on ${new Date().toISOString()}`;
+      const topicId = await getUserMainTopicId(userId, authToken);
       const hcsManagerResponse = await hcsManager(
         topicId,
         noActionMessage,
         accountId,
         privateKey,
-        userId
+        userId,
+        email,
+        password
       );
+      const txId =
+        accountId +
+        "@" +
+        Math.round(Date.now() / 1000).toString() +
+        "." +
+        Math.round(Date.now()).toString();
+      let message;
+
+      if (!authToken) {
+        message = "Auth token absent!!";
+      } else {
+        message = await deductFees(txId, authToken);
+      }
       return {
         content: [
           { type: "text", text: "No action to execute" },
-          { type: "text", text: JSON.stringify(hcsManagerResponse) },
+          { type: "text", text: JSON.stringify(hcsManagerResponse, null, 2) },
+          { type: "text", text: JSON.stringify(message, null, 2) },
         ],
       };
     } catch (error) {
@@ -843,40 +1043,6 @@ async function main() {
   try {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    const tokenBalances = await fetchTokenBalances(
-      "680351f20a8e042b55d9c61d",
-      "thesylus@example.com",
-      "sam@2002"
-    );
-    const stockBalances = await fetchStockBalances(
-      "680351f20a8e042b55d9c61d",
-      "thesylus@example.com",
-      "sam@2002"
-    );
-    const nativeTokens = tokenBalances.filter(
-      (token) => token.symbol === "HBAR" || token.symbol === "USDC"
-    );
-    const stockTokens = tokenBalances.filter(
-      (token) => token.symbol !== "HBAR" && token.symbol !== "USDC"
-    );
-
-    const assetValues = await getAssetValue([
-      ...stockBalances.map(
-        (stock: { stockCode: string; quantity: number }) => ({
-          symbol: stock.stockCode,
-          balance: stock.quantity,
-        })
-      ),
-      ...stockTokens.map((token: { symbol: string; balance: number }) => ({
-        symbol: token.symbol,
-        balance: token.balance,
-      })),
-    ]);
-
-    const nativeTokenValues = await getNativeTokenPrice(nativeTokens);
-
-    const fullAssetValues = assetValues.concat(nativeTokenValues);
-    console.log(fullAssetValues);
   } catch (error) {
     process.exit(1);
   }
