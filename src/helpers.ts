@@ -24,6 +24,10 @@ const PRIVATE_KEY = PrivateKey.fromBytesECDSA(
 );
 const PUBLIC_KEY = PRIVATE_KEY.publicKey;
 const BRAVE_API_KEY = "BSACEBx42fdjEYy1bZ2mcgvO1GLT9Fv";
+const EXCHANGE_RATE = 129.69;
+
+/** BINANCE PRICE URL */
+const binancePriceUrl = `https://api.binance.com/api/v3/ticker/price?symbol=`;
 
 /** INTERFACES */
 export interface NewsItem {
@@ -87,6 +91,11 @@ export interface TokenBalance {
   symbol: string;
   name: string;
   stockCode: string;
+}
+
+export interface PriceFromBinance {
+  symbol: string;
+  price: string;
 }
 
 /** HELPER FUNCTIONS */
@@ -329,6 +338,31 @@ export async function getAssetValue(assets: UserAsset[]): Promise<Asset[]> {
     });
   }
 
+  return assetsAndPrices;
+}
+
+export async function getNativeTokenPrice(
+  assets: UserAsset[]
+): Promise<Asset[]> {
+  if (assets.length === 0) {
+    return [];
+  }
+  let assetsAndPrices: Asset[] = [];
+
+  for (let i = 0; i < assets.length; i++) {
+    const priceResponse = await fetch(
+      `${binancePriceUrl}${assets[i].symbol}USDT`
+    );
+    if (!priceResponse.ok) {
+      throw new Error(`HTTP ${priceResponse.status}`);
+    }
+    const priceData: PriceFromBinance = await priceResponse.json();
+    const price = Number(priceData.price);
+    assetsAndPrices.push({
+      symbol: assets[i].symbol,
+      value: price * assets[i].balance * EXCHANGE_RATE,
+    });
+  }
   return assetsAndPrices;
 }
 

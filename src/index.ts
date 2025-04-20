@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { HederaAgentKit } from "hedera-agent-kit";
-import { Client, PrivateKey, TransactionReceipt } from "@hashgraph/sdk";
+import { Client, PrivateKey } from "@hashgraph/sdk";
 import dotenv from "dotenv";
 import {
   getAuthToken,
@@ -15,9 +15,8 @@ import {
   redeemTokens,
   swapForUSDC,
   MarketNews,
-  createTopic,
-  submitMessage,
   hcsManager,
+  getNativeTokenPrice,
 } from "./helpers.js";
 
 dotenv.config();
@@ -317,6 +316,12 @@ server.tool(
           ],
         };
       }
+      const nativeTokens = tokenBalances.filter(
+        (token) => token.symbol === "HBAR" || token.symbol === "USDC"
+      );
+      const stockTokens = tokenBalances.filter(
+        (token) => token.symbol !== "HBAR" && token.symbol !== "USDC"
+      );
 
       const assetValues = await getAssetValue([
         ...stockBalances.map(
@@ -325,13 +330,16 @@ server.tool(
             balance: stock.quantity,
           })
         ),
-        ...tokenBalances.map((token: { symbol: string; balance: number }) => ({
+        ...stockTokens.map((token: { symbol: string; balance: number }) => ({
           symbol: token.symbol,
           balance: token.balance,
         })),
       ]);
 
-      if (!assetValues || assetValues.length === 0) {
+      const nativeTokenValues = await getNativeTokenPrice(nativeTokens);
+
+      const fullAssetValues = assetValues.concat(nativeTokenValues);
+      if (!fullAssetValues || fullAssetValues.length === 0) {
         return {
           content: [
             {
@@ -343,18 +351,18 @@ server.tool(
       }
 
       let totalValue = 0;
-      for (let i = 0; i < assetValues.length; i++) {
-        if (assetValues[i].value < 0) {
+      for (let i = 0; i < fullAssetValues.length; i++) {
+        if (fullAssetValues[i].value < 0) {
           return {
             content: [
               {
                 type: "text",
-                text: `Error: Invalid negative value for asset ${assetValues[i].symbol}`,
+                text: `Error: Invalid negative value for asset ${fullAssetValues[i].symbol}`,
               },
             ],
           };
         }
-        totalValue += assetValues[i].value;
+        totalValue += fullAssetValues[i].value;
       }
 
       const valueMessage = `Aggregated portfolio value for ${userId} on ${new Date().toISOString()} is ${totalValue} KES`;
@@ -370,7 +378,7 @@ server.tool(
         content: [
           {
             type: "text",
-            text: JSON.stringify(assetValues),
+            text: JSON.stringify(fullAssetValues),
           },
           {
             type: "text",
@@ -835,6 +843,40 @@ async function main() {
   try {
     const transport = new StdioServerTransport();
     await server.connect(transport);
+    const tokenBalances = await fetchTokenBalances(
+      "680351f20a8e042b55d9c61d",
+      "thesylus@example.com",
+      "sam@2002"
+    );
+    const stockBalances = await fetchStockBalances(
+      "680351f20a8e042b55d9c61d",
+      "thesylus@example.com",
+      "sam@2002"
+    );
+    const nativeTokens = tokenBalances.filter(
+      (token) => token.symbol === "HBAR" || token.symbol === "USDC"
+    );
+    const stockTokens = tokenBalances.filter(
+      (token) => token.symbol !== "HBAR" && token.symbol !== "USDC"
+    );
+
+    const assetValues = await getAssetValue([
+      ...stockBalances.map(
+        (stock: { stockCode: string; quantity: number }) => ({
+          symbol: stock.stockCode,
+          balance: stock.quantity,
+        })
+      ),
+      ...stockTokens.map((token: { symbol: string; balance: number }) => ({
+        symbol: token.symbol,
+        balance: token.balance,
+      })),
+    ]);
+
+    const nativeTokenValues = await getNativeTokenPrice(nativeTokens);
+
+    const fullAssetValues = assetValues.concat(nativeTokenValues);
+    console.log(fullAssetValues);
   } catch (error) {
     process.exit(1);
   }
