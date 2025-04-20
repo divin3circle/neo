@@ -19,6 +19,7 @@ import {
   getNativeTokenPrice,
   deductFees,
   getUserMainTopicId,
+  createTopic,
 } from "./helpers.js";
 
 dotenv.config();
