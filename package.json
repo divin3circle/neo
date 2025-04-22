@@ -8,7 +8,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc && chmod 755 build/index.js",
     "client": "tsc && chmod 755 build/client/index.js",
-    "dev": "node build/client/index.js build/index.js"
+    "dev": "node build/client/index.js build/index.js",
+    "mcp-server": "tsc && node build/mcp-server.js"
   },
   "files": [
     "build"
@@ -32,7 +33,11 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "@hashgraph/sdk": "^2.62.0",
     "@modelcontextprotocol/sdk": "^1.10.2",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "cors": "^2.8.5",
     "dotenv": "^16.5.0",
+    "express": "^5.1.0",
     "finnhub": "^1.2.19",
     "hedera-agent-kit": "^1.0.6",
     "ts-node": "^10.9.2",

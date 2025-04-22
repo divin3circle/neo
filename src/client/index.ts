@@ -19,7 +19,7 @@ interface ToolResult {
   content: Array<{ type: string; text: string }>;
 }
 
-class MCPClient {
+export class MCPClient {
   private mcp: Client;
   private anthropic: Anthropic;
   private transport: StdioClientTransport | null = null;
@@ -31,6 +31,10 @@ class MCPClient {
       apiKey: ANTHROPIC_API_KEY,
     });
     this.mcp = new Client({ name: "mcp-client-cli", version: "1.0.0" });
+  }
+
+  public getTools(): Tool[] {
+    return this.tools;
   }
 
   async connectToServer(serverScriptPath: string) {
