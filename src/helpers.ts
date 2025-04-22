@@ -205,7 +205,8 @@ export async function getAuthToken(
  * @side-effects - Makes HTTP requests to auth and stock services
  * @performance - O(n) where n is number of stock holdings
  * @example
- * const stocks = await fetchStockBalances("user123", "user@example.com", "password123");
+ * const stocks = await fetchStockBalances("user123", "user@example.com",
+ * "password123");
  */
 export async function fetchStockBalances(
   userId: string,
@@ -276,7 +277,8 @@ export async function fetchStockBalances(
  * @side-effects - Makes HTTP requests to auth and token services
  * @performance - O(n) where n is number of token holdings
  * @example
- * const tokens = await fetchTokenBalances("user123", "user@example.com", "password123");
+ * const tokens = await fetchTokenBalances("user123", "user@example.com",
+ * "password123");
  */
 export async function fetchTokenBalances(
   userId: string,
@@ -359,9 +361,11 @@ export async function scrapStockPriceFromNse(symbol: string): Promise<number> {
 }
 
 /**
- * Calculates current value of assets based on their quantities and current prices.
+ * Calculates current value of assets based on their quantities and current
+ * prices.
  * @param assets - Array of assets with symbol and balance
- * @returns Promise<Array<{symbol: string, value: number}>> - Array of assets with their current values
+ * @returns Promise<Array<{symbol: string, value: number}>> - Array of
+ * assets with their current values
  * @throws Error - If price fetching fails
  * @side-effects - Makes HTTP requests to fetch current prices
  * @performance - O(n) where n is number of assets, makes n HTTP requests
@@ -392,7 +396,8 @@ export async function getAssetValue(assets: UserAsset[]): Promise<Asset[]> {
 
 /**
  * Fetches the current KES/USD exchange rate from XE API.
- * @returns Promise<number> Returns the current exchange rate. If the API call fails, returns a default rate of 129.65
+ * @returns Promise<number> Returns the current exchange rate. If the API
+ * call fails, returns a default rate of 129.65
  * @throws Error - If the API request fails or response cannot be parsed
  * @side-effects Makes an HTTP request to external XE API
  * @performance O(1) - Single API call
@@ -418,9 +423,11 @@ export async function getExchangeRate(): Promise<number> {
 }
 
 /**
- * Fetches current prices for native tokens (HBAR, USDC) from Binance API and calculates their value in KES.
+ * Fetches current prices for native tokens (HBAR, USDC) from Binance API
+ * and calculates their value in KES.
  * @param assets - Array of token assets containing symbol and balance
- * @returns Promise<Array<{symbol: string, value: number}>> Array of assets with their KES values
+ * @returns Promise<Array<{symbol: string, value: number}>> Array of assets
+ * with their KES values
  * @throws Error - If Binance API request fails or returns invalid data
  * @side-effects
  * - Makes HTTP requests to Binance API for each token
@@ -617,7 +624,8 @@ export async function generateReport(
  * @param tokenCode - Symbol of token to mint
  * @param amount - Amount of tokens to mint
  * @param authToken - User's authentication token
- * @returns Promise<MintTransactionResponse | null> - Transaction details if successful
+ * @returns Promise<MintTransactionResponse | null> - Transaction
+ * details if successful
  * @throws Error - If API request fails or transaction fails
  * @side-effects - Makes HTTP request and creates blockchain transaction
  * @performance - O(1) time complexity, single HTTP request
@@ -665,7 +673,8 @@ export async function mintTokens(
  * @side-effects - Creates blockchain transaction and makes HTTP request
  * @performance - O(1) time complexity, single transaction
  * @example
- * const response = await redeemTokens("KCB", 100, "auth-token", privateKey, "0.0.123", "0.0.456");
+ * const response = await redeemTokens("KCB", 100, "auth-token", privateKey,
+ *  "0.0.123", "0.0.456");
  */
 export async function redeemTokens(
   tokenCode: string,
@@ -736,7 +745,8 @@ export async function redeemTokens(
  * @side-effects - Makes HTTP request and creates blockchain transaction
  * @performance - O(1) time complexity, single HTTP request
  * @example
- * const response = await swapForUSDC("KCB", 100, "auth-token", "0.0.123", "private-key");
+ * const response = await swapForUSDC("KCB", 100, "auth-token", "0.0.123",
+ *  "private-key");
  */
 export async function swapForUSDC(
   tokenCode: string,
@@ -786,7 +796,8 @@ export async function swapForUSDC(
  * @side-effects - Creates blockchain transaction
  * @performance - O(1) time complexity, single transaction
  * @example
- * const receipt = await createTopic("user123", "Conversation with Neo", privateKey, 1);
+ * const receipt = await createTopic("user123", "Conversation with Neo",
+ * privateKey, 1);
  */
 export async function createTopic(
   topicName: string,
@@ -828,7 +839,8 @@ export async function createTopic(
  * @side-effects - Creates blockchain transaction
  * @performance - O(1) time complexity, single transaction
  * @example
- * const receipt = await submitMessage("0.0.123", "Hello World", "0.0.456", "private-key");
+ * const receipt = await submitMessage("0.0.123", "Hello World", "0.0.456",
+ *  "private-key");
  */
 export async function submitMessage(
   topicID: string,
@@ -855,7 +867,7 @@ export async function submitMessage(
 }
 
 /**
- * Manages HCS topic creation and message submission.
+ * Manages HCS topic creation and message submission on Hedera Network.
  * @param topicId - Optional ID of existing topic
  * @param message - Message to submit
  * @param accountId - Account ID for transaction signing
@@ -868,7 +880,8 @@ export async function submitMessage(
  * @side-effects - Creates blockchain transaction(s)
  * @performance - O(1) time complexity, 1-2 transactions
  * @example
- * const response = await hcsManager("0.0.123", "Hello", "0.0.456", "private-key", "user123");
+ * const response = await hcsManager("0.0.123", "Hello", "0.0.456", "private-key",
+ *  "user123");
  */
 export async function hcsManager(
   topicId: string | undefined,
@@ -881,6 +894,7 @@ export async function hcsManager(
 ): Promise<HcsManagerResponse> {
   try {
     let topicID;
+    const authToken = await getAuthToken(userEmail, password);
     if (!topicId) {
       const topicReceipt: TransactionReceipt = await createTopic(
         `${userId}-${accountId}`,
@@ -896,13 +910,14 @@ export async function hcsManager(
           ],
         };
       }
-      const authToken = await getAuthToken(userEmail, password);
+
       if (!authToken) {
         return {
           content: [{ type: "text", text: "Auth token absent!!" }],
         };
       }
-      const createMessageResponse = await createTopicOnBackend(
+      // TODO: Add error handling
+      const createTopicResponse = await createTopicOnBackend(
         `${userId}-${accountId}`,
         `${accountId} conversation with Neo`,
         `${accountId} conversation with Neo`,
@@ -946,6 +961,10 @@ export async function hcsManager(
             type: "text",
             text: `${messageReceipt.scheduledTransactionId?.toString()}`,
           },
+          {
+            type: "text",
+            text: JSON.stringify(addMessageResponse, null, 2),
+          },
         ],
       };
     }
@@ -965,6 +984,16 @@ export async function hcsManager(
         ],
       };
     }
+    if (!authToken) {
+      return {
+        content: [{ type: "text", text: "Auth token absent!!" }],
+      };
+    }
+    const addMessageResponse = await addMessageToTopic(
+      topicId!,
+      message,
+      authToken
+    );
 
     return {
       content: [
@@ -976,6 +1005,10 @@ export async function hcsManager(
         {
           type: "text",
           text: `${messageReceipt.scheduledTransactionId?.toString()}`,
+        },
+        {
+          type: "text",
+          text: JSON.stringify(addMessageResponse, null, 2),
         },
       ],
     };
@@ -996,7 +1029,8 @@ export async function hcsManager(
  * @throws Error - If initialization fails or environment variables are missing
  * @side-effects - Creates a new Hedera Agent Kit instance
  * @performance - O(1) time complexity, single initialization
- * @dependencies - Requires ACCOUNT_ID, PRIVATE_KEY, PUBLIC_KEY, and NETWORK environment variables
+ * @dependencies - Requires ACCOUNT_ID, PRIVATE_KEY, PUBLIC_KEY, and NETWORK
+ *  environment variables
  * @example
  * const agent = await initializeHederaAgent();
  */
@@ -1021,7 +1055,8 @@ export async function initializeHederaAgent(): Promise<HederaAgentKit> {
  * @side-effects - Makes HTTP request and creates blockchain transaction
  * @performance - O(1) time complexity, single HTTP request
  * @example
- * const response = await deductFees("0.0.123", "Hello", "0.0.456", "private-key", "user123");
+ * const response = await deductFees("0.0.123", "Hello", "0.0.456", "private-key"
+ * , "user123");
  */
 export async function deductFees(transactionId: string, authToken: string) {
   try {
@@ -1056,7 +1091,8 @@ export async function deductFees(transactionId: string, authToken: string) {
  * @throws Error - If API request fails or transaction fails
  * @performance - O(1) time complexity, single transaction
  * @example
- * const response = await createTopic("user123", "Conversation with Neo", "private-key", 1);
+ * const response = await createTopic("user123", "Conversation with Neo",
+ * "private-key", 1);
  */
 export async function createTopicOnBackend(
   topicName: string,
@@ -1099,7 +1135,8 @@ export async function createTopicOnBackend(
  * @throws Error - If API request fails or transaction fails
  * @performance - O(1) time complexity, single transaction
  * @example
- * const response = await addMessage("0.0.123", "Hello", "0.0.456", "private-key", "user123");
+ * const response = await addMessage("0.0.123", "Hello", "0.0.456", "private-key",
+ * "user123");
  */
 export async function addMessageToTopic(
   hederaTopicId: string,

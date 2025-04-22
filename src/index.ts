@@ -20,6 +20,7 @@ import {
   deductFees,
   getUserMainTopicId,
   createTopic,
+  addMessageToTopic,
 } from "./helpers.js";
 
 dotenv.config();
