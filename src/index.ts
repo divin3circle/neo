@@ -21,6 +21,8 @@ import {
   getUserMainTopicId,
   createTopic,
   addMessageToTopic,
+  generateAuthToken,
+  initiateSTKPush,
 } from "./helpers.js";
 
 dotenv.config();

@@ -26,6 +26,7 @@ const PUBLIC_KEY = PRIVATE_KEY.publicKey;
 const BRAVE_API_KEY = "BSACEBx42fdjEYy1bZ2mcgvO1GLT9Fv";
 const EXCHANGE_RATE_URL =
   "https://www.xe.com/api/protected/statistics/?from=USD&to=KES";
+const USDC_TOKEN_ID = "0.0.5791936";
 
 /** BINANCE PRICE URL */
 const binancePriceUrl = `https://api.binance.com/api/v3/ticker/price?symbol=`;
@@ -150,6 +151,8 @@ interface Topic {
 interface TopicsResponse {
   topics: Topic[];
 }
+
+export type RequestExtended = Request & { token?: string };
 
 /** HELPER FUNCTIONS */
 /**
@@ -1220,3 +1223,137 @@ export async function getUserMainTopicId(
     throw error;
   }
 }
+
+/**
+ * Get the USDC balance of a user using Hedera Agent Kit
+ * @param accountId - the account id of the user
+ * @param privateKey - the private key of the user
+ * @param publicKey - the public key of the user
+ * @returns Promise<number> - The USDC balance of the user
+ * @throws Error - If API request fails or transaction fails
+ * @performance - O(1) time complexity, single transaction
+ * @example
+ * const usdcBalance = await getUSDCBalance("0.0.123", "private-key",
+ * "0.0.456");
+ */
+export async function getUSDCBalance(
+  accountId: string,
+  privateKey: string,
+  publicKey: string
+): Promise<number> {
+  try {
+    const userAgent = new HederaAgentKit(
+      accountId,
+      privateKey,
+      publicKey,
+      "testnet"
+    );
+    const htsBalance = await userAgent.getHtsBalance(USDC_TOKEN_ID, "testnet");
+    return htsBalance;
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Initiate an STK push transaction
+ * @param phoneNumber - the phone number of the user
+ * @param amount - the amount to be pushed
+ * @param accountReference - the account reference of the user
+ * @param txnDesc - transaction description
+ */
+export async function initiateSTKPush(
+  phoneNumber: number,
+  amount: number,
+  accountReference: string,
+  txnDesc: string
+) {
+  const businessShortCode = 174379;
+  const passKey =
+    "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919";
+  const timeStamp = getTimestamp();
+  const password = Buffer.from(
+    `${businessShortCode}${passKey}${timeStamp}`
+  ).toString("base64");
+
+  const headers = new Headers();
+  headers.append("Content-Type", "application/json");
+  headers.append("Authorization", "Bearer Pg1lPbk34iKPW8pLIaGvxTZYKB8A");
+
+  const payload = {
+    BusinessShortCode: businessShortCode,
+    Password: password,
+    Timestamp: timeStamp,
+    TransactionType: "CustomerPayBillOnline",
+    Amount: amount,
+    PartyA: phoneNumber,
+    PartyB: businessShortCode,
+    PhoneNumber: phoneNumber,
+    CallBackURL: "https://webhook.site/e5186c20-7499-4797-8d18-9816fce848d4",
+    AccountReference: "NSEBridge",
+    TransactionDesc: txnDesc,
+  };
+
+  try {
+    const response = await fetch(
+      "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+      }
+    );
+
+    const result = await response.text();
+    return result;
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Generate an authentication token for a user
+ * @returns Promise<string> - The authentication token
+ */
+export async function generateAuthToken(): Promise<string> {
+  const SECRET =
+    "UX7bF1kXB1u7tBLaerGPZ7w5aMwtwMW9pvNhGwDUSxcaySnFpCPSV8uF0sPTlisA";
+  const KEY = "xRcQpyqn22bp1YurRlxJiWbCzvSOGkBVRz9GOBxXWzdH1ZrQ";
+  const url =
+    "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials";
+
+  if (!url || !SECRET || !KEY) {
+    throw new Error("Missing environment variables");
+  }
+
+  const auth = Buffer.from(`${KEY}:${SECRET}`).toString("base64");
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Basic ${auth}`,
+      },
+    });
+    const data = await response.json();
+    return data.access_token;
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Generate a timestamp
+ * @returns string - The timestamp
+ */
+export const getTimestamp = () => {
+  const date = new Date();
+  return (
+    date.getFullYear() +
+    ("0" + (date.getMonth() + 1)).slice(-2) +
+    ("0" + date.getDate()).slice(-2) +
+    ("0" + date.getHours()).slice(-2) +
+    ("0" + date.getMinutes()).slice(-2) +
+    ("0" + date.getSeconds()).slice(-2)
+  );
+};
