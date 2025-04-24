@@ -4,6 +4,7 @@ import {
   CustomFixedFee,
   Hbar,
   PrivateKey,
+  TokenId,
   TopicCreateTransaction,
   TopicMessageSubmitTransaction,
   TransactionReceipt,
@@ -1306,6 +1307,33 @@ export async function initiateSTKPush(
 
     const result = await response.text();
     return result;
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Transfer USDC from treasury account to user account
+ * @param amount - the amount(in KES) to be transferred
+ * @param accountId - the account id of the user
+ * @returns Promise<string> - The transaction id
+ */
+export async function transferUSDCFromTreasuryToUser(
+  amount: number,
+  accountId: string
+) {
+  // Get the exchange rate
+  const exchangeRate = await getExchangeRate();
+  const amountInUSDC = amount / exchangeRate;
+
+  try {
+    const kit = await initializeHederaAgent();
+    const transaction = await kit.transferToken(
+      TokenId.fromString(USDC_TOKEN_ID),
+      accountId,
+      amountInUSDC
+    );
+    return transaction;
   } catch (error) {
     throw error;
   }
