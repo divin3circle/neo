@@ -11,6 +11,24 @@ const port = process.env.MCP_PORT || 4000;
 app.use(cors());
 app.use(express.json());
 
+// Request logging middleware
+app.use((req: Request, res: Response, next) => {
+  const start = Date.now();
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+
+  // Log response when it's sent
+  res.on("finish", () => {
+    const duration = Date.now() - start;
+    console.log(
+      `[${new Date().toISOString()}] ${req.method} ${req.url} ${
+        res.statusCode
+      } - ${duration}ms`
+    );
+  });
+
+  next();
+});
+
 let mcpClient: MCPClient | null = null;
 
 // Initialize MCP client
