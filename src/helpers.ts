@@ -1115,7 +1115,12 @@ export async function createTopicOnBackend(
         Authorization: `Bearer ${authToken}`,
       },
       body: JSON.stringify(
-        { topicName, description, topicMemo, hederaTopicId },
+        {
+          name: topicName,
+          description,
+          topicMemo,
+          hederaTopicID: hederaTopicId,
+        },
         null,
         2
       ),
@@ -1132,7 +1137,7 @@ export async function createTopicOnBackend(
 }
 
 /**
- * Add a new message to a topic that has been created on our backend
+ * Add a message to a topic that has been created on our backend
  * @param hederaTopicId - the Hedera Topic ID of the topic created on Hedera Network
  * @param message - the message to be added to the topic
  * @param authToken - the authentication token of the user
@@ -1149,19 +1154,40 @@ export async function addMessageToTopic(
   authToken: string
 ) {
   try {
-    const url = `${API_BASE_URL}/topics/${hederaTopicId}/messages`;
+    // First, get the MongoDB topic ID using the Hedera Topic ID
+    const getTopicUrl = `${API_BASE_URL}/topics/hedera/${hederaTopicId}`;
+    const topicResponse = await fetch(getTopicUrl, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+
+    if (!topicResponse.ok) {
+      const errorData = await topicResponse.json();
+      throw new Error(errorData.message || "Failed to get topic by Hedera ID");
+    }
+
+    const topicData = await topicResponse.json();
+    const mongoTopicId = topicData.topic._id;
+
+    // Now use the MongoDB topic ID to add the message
+    const url = `${API_BASE_URL}/topics/${mongoTopicId}/messages`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${authToken}`,
       },
-      body: JSON.stringify({ message }, null, 2),
+      body: JSON.stringify({ content: message }, null, 2),
     });
+
     if (!response.ok) {
       const errorData = await response.json();
       throw new Error(errorData.message || "Failed to add message to topic");
     }
+
     const result = await response.json();
     return result;
   } catch (error) {

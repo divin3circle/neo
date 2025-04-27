@@ -19,6 +19,9 @@ import {
   getNativeTokenPrice,
   deductFees,
   getUserMainTopicId,
+  initiateSTKPush,
+  transferUSDCFromTreasuryToUser,
+  getExchangeRate,
 } from "./helpers.js";
 
 dotenv.config();
@@ -1032,6 +1035,61 @@ server.tool(
           {
             type: "text",
             text: `Error executing trading actions: ${errorMessage}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+/**
+ * Buy USDC from M-Pesa
+ * @param phoneNumber - The phone number of the user without the country code, eg. 254712345678
+ * @param amount - The amount of KES to spend
+ * @param accountId - The Hedera account ID of the user
+ * @returns Promise<{content: Array<{type: string, text: string}>}> - The response from the M-Pesa transaction and the transaction ID
+ */
+server.tool(
+  "buy-usdc",
+  "Buy USDC from M-Pesa",
+  {
+    phoneNumber: z
+      .string()
+      .describe(
+        "The phone number of the user without the country code, eg. 254712345678"
+      ),
+    amount: z.number().describe("The amount of KES to spend"),
+    accountId: z.string().describe("The Hedera account ID of the user"),
+  },
+  async ({ phoneNumber, amount, accountId }, extra) => {
+    const phoneNo = parseInt(phoneNumber);
+    try {
+      const response = await initiateSTKPush(
+        phoneNo,
+        amount,
+        accountId,
+        "Buy USDC from M-Pesa"
+      );
+      const txnID = await transferUSDCFromTreasuryToUser(amount, accountId);
+      const usdcBought = (await getExchangeRate()) * amount;
+      return {
+        content: [
+          { type: "text", text: JSON.stringify(response, null, 2) },
+          { type: "text", text: JSON.stringify(txnID, null, 2) },
+          {
+            type: "text",
+            text: `Successfully bought ${usdcBought} USDC. Hashscan link: https://hashscan.io/testnet/tx/${txnID}`,
+          },
+        ],
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error initiating M-Pesa transaction: ${errorMessage}`,
           },
         ],
       };
