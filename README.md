@@ -1,8 +1,14 @@
-# NEO
+# NEO -> 0.0.5913311
+
+## Key Details
+
+1. Neo Agent Account -> 0.0.5913311
+1. Mock USDC token -> 0.0.5791936
+1. Sample topic with test user account ->
 
 ## Consumptions
 
-To effectively perform rebalancing Neo will need the following data.
+To effectively perform rebalancing Neo will uses the following.
 
 ### On-Chain Data
 
@@ -15,7 +21,7 @@ To effectively perform rebalancing Neo will need the following data.
 
 - NSE Shares & Stock prices held by the user
 - New around shares and stocks being held by the user or those of interest to him
-- M-pesa transaction info
+- M-Pesa transaction info
 - User defined constraints
 
 ## Actions Logic

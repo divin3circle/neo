@@ -23,6 +23,7 @@ const API_BASE_URL = "http://localhost:5004/api";
 const PRIVATE_KEY = PrivateKey.fromBytesECDSA(
   Buffer.from(DER_PRIVATE_KEY, "hex")
 );
+const AGENT_ACCOUNT_ID = "0.0.5913311";
 const PUBLIC_KEY = PRIVATE_KEY.publicKey;
 const BRAVE_API_KEY = "BSACEBx42fdjEYy1bZ2mcgvO1GLT9Fv";
 const EXCHANGE_RATE_URL =
@@ -813,7 +814,7 @@ export async function createTopic(
     const customFee = new CustomFixedFee()
       .setDenominatingTokenId(MOCK_USDC!)
       .setAmount(Number(fee))
-      .setFeeCollectorAccountId(ACCOUNT_ID!);
+      .setFeeCollectorAccountId(AGENT_ACCOUNT_ID);
 
     let client;
     client = Client.forTestnet();
