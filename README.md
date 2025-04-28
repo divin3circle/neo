@@ -8,7 +8,7 @@
 
 ## Building Application
 
-### Option 1 via Native Client
+### Option 1 via React Native Client
 
 1. Clone this repo: `git clone https://github.com/divin3circle/neo.git`
 1. At the root build the MCP server and run the client: `npm run build && npm run mcp-server`
