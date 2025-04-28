@@ -1,10 +1,52 @@
-# NEO -> 0.0.5913311
+# NEO - 0.0.5913311
 
 ## Key Details
 
 1. Neo Agent Account -> [0.0.5913311](https://hashscan.io/testnet/account/0.0.5913311?pa=1&ps=1&pf=1&pc=1&ph=1&pt=1&pn=1&pr=1&p1=1&k1=1745735450.778853656)
 1. Mock USDC token -> [0.0.5791936](https://hashscan.io/testnet/token/0.0.5791936)
 1. Sample topic with test user account -> [here](https://hashscan.io/testnet/transaction/1745327765.775018000)
+
+## Building Application
+
+### Option 1 via Native Client
+
+1. Clone this repo: `git clone https://github.com/divin3circle/neo.git`
+1. At the root build the MCP server and run the client: `npm run build && npm run mcp-server`
+1. Clone the NSEChain App: `git clone https://github.com/divin3circle/NSEChainBridge.git`
+1. Run the backend: `cd backend && npm run build && NODE_ENV=testnet PORT=5004 node dist/index.js`
+1. Run the frontend: `npx expo run:ios #use android if you're on windows and have Android studio`
+1. Authentication details: `username: Sylus Abel, email: sa44@example.com, password: sam@2002`
+1. Navigate to the chat section and begin your conversation with Neo.
+   ![chat_section](./neo.png)
+
+### Option 2 via Claude Desktop(Recommended)
+
+_Docker is required for this step, ensure that the Docker Desktop app is also open and running_
+
+1. Follow step 1 - 4 above.
+1. Add neo to the Claude desktop's config.json file. Check [this](https://modelcontextprotocol.io/quickstart/server#node)
+1. Add brave_search and brave_local_search servers to the config file as well. Check [this](https://pub.spillwave.com/mcp-integration-how-brave-search-and-claude-desktop-enhance-ai-assistant-agentic-capabilities-c840590fa100)
+1. You should see 8 tools available.
+   ![claude_tools](./claude.png)
+1. Provide these credentials to call any tool.
+
+```bash
+email: sa44@example.com
+
+username: Sylus Abel
+
+password: sam@2002
+
+privateKey: 302e020100300506032b65700422042037bd51ae06cbc9ac1954c0782bc1830559256d63ddc0d6d45e503aa7fde2e3e3
+
+userId: 680f393882aca3762a5ef9eb
+
+Hedera Account ID: 0.0.5917133
+
+Phone number: #Provide an M-pesa eligible mobile number
+```
+
+_Learn about [M-Pesa](https://www.investopedia.com/terms/m/mpesa.asp) here_
 
 ## Consumptions
 
