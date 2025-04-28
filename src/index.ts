@@ -1071,7 +1071,7 @@ server.tool(
         "Buy USDC from M-Pesa"
       );
       const txnID = await transferUSDCFromTreasuryToUser(amount, accountId);
-      const usdcBought = (await getExchangeRate()) * amount;
+      const usdcBought = amount / (await getExchangeRate());
       return {
         content: [
           { type: "text", text: JSON.stringify(response, null, 2) },

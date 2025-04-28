@@ -94,6 +94,12 @@ Minting of tokens would be against user's deposited fiat or USDC holding within 
 
 Just as the rebalancing logic, Neo will check the user's current holding stocks-wise and token wise, previous logs and their outcomes plus market sentiment and news flags to determine the best action to perform on a token/share in holding by the user.
 
+## Documentation
+
+1. HCS & HIP-991 implementation. [Here](https://github.com/divin3circle/neo/blob/main/src/helpers.ts#L801-L872)
+1. Hedera agent kit. [Here](https://github.com/divin3circle/neo/blob/main/src/helpers.ts#L1042-L1053)
+1. MCP Server & Client. [Here](https://github.com/divin3circle/neo/blob/main/src/mcp-server.ts) & [Here](https://github.com/divin3circle/neo/blob/main/src/index.ts#L55-L70)
+
 ## Logging & Learning
 
 Each action, i.e. rebalancing, minting or redeeming by Neo will be logged to HCS as a topic, and or saved in a database for learning purposes and review. With these memory Neo can get smarter without the need to train while adapting to a user's specific habits, appetite and the market it finds itself in.
