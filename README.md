@@ -5,6 +5,7 @@
 1. Neo Agent Account -> [0.0.5913311](https://hashscan.io/testnet/account/0.0.5913311?pa=1&ps=1&pf=1&pc=1&ph=1&pt=1&pn=1&pr=1&p1=1&k1=1745735450.778853656)
 1. Mock USDC token -> [0.0.5791936](https://hashscan.io/testnet/token/0.0.5791936)
 1. Sample topic with test user account -> [here](https://hashscan.io/testnet/transaction/1745327765.775018000)
+1. Token swap for USDC transaction [here](https://hashscan.io/testnet/transaction/1745842848.210210158) and [here](https://hashscan.io/testnet/transaction/1745842848.210210159)
 
 ## Building Application
 
@@ -15,7 +16,7 @@
 1. Clone the NSEChain App: `git clone https://github.com/divin3circle/NSEChainBridge.git`
 1. Run the backend: `cd backend && npm run build && NODE_ENV=testnet PORT=5004 node dist/index.js`
 1. Run the frontend: `npx expo run:ios #use android if you're on windows and have Android studio`
-1. Authentication details: `username: Sylus Abel, email: sa44@example.com, password: sam@2002`
+1. Authentication details: `username: Sylus Abel, email: sa44@example.com, password: sam@2002, userId: 680f393882aca3762a5ef9eb`
 1. Navigate to the chat section and begin your conversation with Neo.
    ![chat_section](./neo.png)
 
